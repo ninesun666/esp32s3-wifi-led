@@ -1,0 +1,27 @@
+CONFIG_IDF_TARGET="esp32s3"
+
+# Credentials are NOT here. They live in sdkconfig.local (gitignored), merged
+# via SDKCONFIG_DEFAULTS in CMakeLists.txt. Delete sdkconfig after editing.
+
+# --- Match the N16R8 module: 16MB flash ---
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+
+# --- Match the N16R8 module: 8MB Octal PSRAM @ 80MHz ---
+# R8 means Octal, NOT Quad. Wrong setting boots but PSRAM init fails.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+
+# --- Larger app partition, ready for real projects ---
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- LED pins (see main/Kconfig.projbuild) ---
+CONFIG_EXAMPLE_RGB_LED_GPIO=48
+CONFIG_EXAMPLE_RGB_LED_COUNT=1
+CONFIG_EXAMPLE_MONO_LED_GPIO=-1
+
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y

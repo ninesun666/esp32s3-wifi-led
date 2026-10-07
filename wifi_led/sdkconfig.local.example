@@ -1,0 +1,8 @@
+# Copy to sdkconfig.local and fill in your own router credentials.
+# sdkconfig.local is gitignored; this template is not.
+#
+#   cp sdkconfig.local.example sdkconfig.local
+#   rm sdkconfig          # force sdkconfig.defaults(+local) to be re-read
+#   idf.py build
+CONFIG_EXAMPLE_WIFI_SSID="your-ssid"
+CONFIG_EXAMPLE_WIFI_PASSWORD="your-password"

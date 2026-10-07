@@ -1,0 +1,56 @@
+menu "Wi-Fi LED example"
+
+    config EXAMPLE_WIFI_SSID
+        string "Router SSID"
+        default "CHANGE_ME"
+        help
+            Name of the 2.4GHz access point to join.
+
+    config EXAMPLE_WIFI_PASSWORD
+        string "Router password"
+        default "CHANGE_ME"
+        help
+            WPA2/WPA3 passphrase. Empty string for an open network.
+
+    config EXAMPLE_RGB_LED_GPIO
+        int "WS2812 RGB LED GPIO"
+        range 0 48
+        default 48
+        help
+            Data pin of the onboard WS2812. ESP32-S3-DevKitC-1 uses GPIO 48.
+            Avoid 19/20 (native USB), 43/44 (UART), 26-32 (Octal PSRAM).
+
+    config EXAMPLE_RGB_LED_COUNT
+        int "Number of WS2812 LEDs"
+        range 1 8
+        default 1
+
+    config EXAMPLE_MONO_LED_GPIO
+        int "Plain single-color LED GPIO, -1 to disable"
+        range -1 48
+        default -1
+        help
+            Optional second indicator wired as a plain GPIO LED.
+
+    config EXAMPLE_AP_ENABLE
+        bool "Run a fallback SoftAP on the board"
+        default n
+        help
+            A PC that joins this SoftAP sends ALL of its traffic to the board,
+            because Windows promotes the hotspot to the default gateway and
+            esp_wifi's AP does not NAT to its own uplink. The joiner therefore
+            loses internet until it disconnects. Turn this on only to debug a
+            board whose LAN address is unreachable; otherwise open the page at
+            the router-assigned STA address logged as "got IP: ...".
+
+    config EXAMPLE_AP_SSID
+        string "SoftAP SSID"
+        depends on EXAMPLE_AP_ENABLE
+        default "ESP32-MONITOR"
+
+    config EXAMPLE_AP_PASSWORD
+        string "SoftAP password, at least 8 characters"
+        depends on EXAMPLE_AP_ENABLE
+        default "esp32test"
+
+endmenu

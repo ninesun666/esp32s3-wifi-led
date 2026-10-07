@@ -1,0 +1,22 @@
+# --- ESP-IDF build output ---
+build/
+sdkconfig
+sdkconfig.old
+sdkconfig.saved
+managed_components/
+*.bin.efuse_key*
+
+# --- Local secrets: real router credentials, test AP keys ---
+sdkconfig.local
+ap_profile.xml
+
+# --- Host-side scratch, machine specific ---
+__pycache__/
+*.pyc
+check_*.ps1
+list_*.ps1
+net_probe.ps1
+probe.txt
+idf_set_target.ps1
+hello_world/
+wifi_test/
