@@ -81,17 +81,25 @@ partitions.csv        nvs / otadata / phy_init / ota_0 / ota_1 / storage，给 O
 ## 编译烧录
 
 Windows + Git Bash 下必须走 `idf_run.ps1`（直接跑 `idf.py` 会被 ESP-IDF 以
-`MSys/Mingw is not supported` 拒绝）。参数叫 `-Dir` 而不是 `-ProjectDir`，
-因为 `idf.py` 自己的 `-p` 会被 PowerShell 前缀匹配到 `-ProjectDir` 上。
+`MSys/Mingw is not supported` 拒绝）。两个约定：工程目录用 `-Dir`（不叫 `-ProjectDir`，
+否则和 `idf.py` 自己的 `-p` 撞前缀）；**串口用 `-Port`，绝不能写 `-p COM7`** —— PowerShell
+会把未知的短选项整个丢掉，`idf.py` 收不到端口就去自动探测，结果是烧到别的设备或干脆没烧。
+`-Port` 内部转成 `ESPPORT` 环境变量传给 idf.py。
 
 ```bash
 # 在仓库根目录
 cmd //c "powershell -NoProfile -ExecutionPolicy Bypass -File idf_run.ps1 -Dir wifi_led build"
-cmd //c "powershell -NoProfile -ExecutionPolicy Bypass -File idf_run.ps1 -Dir wifi_led -p COM7 flash"
+cmd //c "powershell -NoProfile -ExecutionPolicy Bypass -File idf_run.ps1 -Dir wifi_led -Port COM7 flash"
+
+# 先确认串口真的在（只有 COM3/COM4 这种 BTHENUM 蓝牙口的话，说明数据线没插）
+powershell -NoProfile -Command "[System.IO.Ports.SerialPort]::GetPortNames()"
 
 # 抓 90 秒串口日志（打开端口本身会让板子正常重启，所以连开机日志一起能抓到）
 python grab_log.py 90
 ```
+
+烧完的验收不是"命令返回 0"，而是 `curl http://<板子IP>/api/status` 里出现
+`led_ready` 和 `host` 两个字段、`POST /api/led` 回 200。
 
 非 Windows 或非 Git Bash 环境直接用原生 `idf.py set-target esp32s3 / build / flash` 就行。
 
