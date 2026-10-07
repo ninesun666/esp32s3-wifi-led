@@ -1,2 +1,3 @@
-idf_component_register(SRCS "wifi_led_main.c"
-                       INCLUDE_DIRS ".")
+idf_component_register(SRCS "app_main.c"
+                       INCLUDE_DIRS "."
+                       REQUIRES link_state status_light monitor_server)

@@ -1,0 +1,15 @@
+services:
+  xiaozhi-esp32-server:
+    image: ghcr.nju.edu.cn/xinnan-tech/xiaozhi-esp32-server:server_latest
+    container_name: xiaozhi-esp32-server
+    restart: always
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      - TZ=Asia/Shanghai
+    ports:
+      - "8000:8000"   # websocket: 设备语音通道
+      - "8003:8003"   # http: OTA + 视觉分析
+    volumes:
+      # 覆盖配置放这里，只写要改的字段，其余走镜像内 config.yaml
+      - ./data:/opt/xiaozhi-esp32-server/data

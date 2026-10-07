@@ -1,18 +1,19 @@
-menu "Wi-Fi LED example"
+menu "Wi-Fi LED monitor"
 
-    config EXAMPLE_WIFI_SSID
+    config WIFI_LED_WIFI_SSID
         string "Router SSID"
         default "CHANGE_ME"
         help
-            Name of the 2.4GHz access point to join.
+            Name of the 2.4GHz access point to join. Put the real value in
+            sdkconfig.local, which is gitignored.
 
-    config EXAMPLE_WIFI_PASSWORD
+    config WIFI_LED_WIFI_PASSWORD
         string "Router password"
         default "CHANGE_ME"
         help
             WPA2/WPA3 passphrase. Empty string for an open network.
 
-    config EXAMPLE_RGB_LED_GPIO
+    config WIFI_LED_RGB_GPIO
         int "WS2812 RGB LED GPIO"
         range 0 48
         default 48
@@ -20,19 +21,32 @@ menu "Wi-Fi LED example"
             Data pin of the onboard WS2812. ESP32-S3-DevKitC-1 uses GPIO 48.
             Avoid 19/20 (native USB), 43/44 (UART), 26-32 (Octal PSRAM).
 
-    config EXAMPLE_RGB_LED_COUNT
+    config WIFI_LED_RGB_COUNT
         int "Number of WS2812 LEDs"
         range 1 8
         default 1
 
-    config EXAMPLE_MONO_LED_GPIO
+    config WIFI_LED_MONO_GPIO
         int "Plain single-color LED GPIO, -1 to disable"
         range -1 48
         default -1
         help
             Optional second indicator wired as a plain GPIO LED.
 
-    config EXAMPLE_AP_ENABLE
+    config WIFI_LED_HTTP_PORT
+        int "HTTP monitor port"
+        range 1 65535
+        default 80
+
+    config WIFI_LED_MDNS_HOSTNAME
+        string "mDNS hostname"
+        default "esp32-monitor"
+        help
+            The board answers for http://<hostname>.local on the LAN, so the
+            page is reachable without tracking the DHCP address. Some Windows
+            resolvers do not implement mDNS; fall back to the printed IP.
+
+    config WIFI_LED_AP_ENABLE
         bool "Run a fallback SoftAP on the board"
         default n
         help
@@ -43,14 +57,14 @@ menu "Wi-Fi LED example"
             board whose LAN address is unreachable; otherwise open the page at
             the router-assigned STA address logged as "got IP: ...".
 
-    config EXAMPLE_AP_SSID
+    config WIFI_LED_AP_SSID
         string "SoftAP SSID"
-        depends on EXAMPLE_AP_ENABLE
+        depends on WIFI_LED_AP_ENABLE
         default "ESP32-MONITOR"
 
-    config EXAMPLE_AP_PASSWORD
+    config WIFI_LED_AP_PASSWORD
         string "SoftAP password, at least 8 characters"
-        depends on EXAMPLE_AP_ENABLE
+        depends on WIFI_LED_AP_ENABLE
         default "esp32test"
 
 endmenu

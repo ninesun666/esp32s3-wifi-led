@@ -5,7 +5,8 @@
 
 | 目录 | 说明 |
 | --- | --- |
-| [`wifi_led/`](wifi_led/README.md) | 主项目：Wi-Fi 状态灯 + HTTP 监控页 |
+| [`ROADMAP.md`](ROADMAP.md) | **目标、路线、已定的决策、踩过的坑** —— 接手先读这份 |
+| [`wifi_led/`](wifi_led/README.md) | 主项目：Wi-Fi 状态灯 + HTTP 监控页（拆成三个组件，可当新项目的底座） |
 | `idf_run.ps1` | Windows + Git Bash 下唯一能跑通 `idf.py` 的入口 |
 | `grab_log.py` | 抓 COM7 串口日志（含开机日志） |
 
@@ -41,6 +42,8 @@
    ```
 
 5. 刷机后看串口里的 `got IP: 192.168.x.x -> http://192.168.x.x/`，浏览器直接打开就是这个页面。
+   同一行还会打出 mDNS 地址 `http://esp32-monitor.local/`，板子换了 DHCP 地址也能找到它。
+   **别用 `ping` 判断板子在不在** —— lwIP 默认不回应 ICMP，直接探 80 端口。
 
 > `sdkconfig` 是编译时真正生效的那份，`sdkconfig.defaults` + `sdkconfig.local` 只在
 > `sdkconfig` 不存在时被读取。改完这两个文件要 `rm sdkconfig` 再 build，否则不生效。

@@ -18,5 +18,10 @@ list_*.ps1
 net_probe.ps1
 probe.txt
 idf_set_target.ps1
+*_log.txt
+cap*.txt
+boot_capture.txt
+env_check.ps1
+env_check.txt
 hello_world/
 wifi_test/

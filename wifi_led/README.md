@@ -11,8 +11,12 @@
 | 外网 | TCP 探测 `114.114.114.114:53` 通过 |
 | PSRAM | 8 MiB Octal @ 80 MHz，bootloader 自检 OK |
 | Flash | 16 MiB |
-| RGB 灯 | GPIO 48 上的 WS2812，物理确认会亮 |
-| 网页 | `http://<板子IP>/` 返回 200，2 s 轮询 `/api/status` |
+| RGB 灯 | GPIO 48 上的 WS2812，物理确认会亮，串口打出 `rgb=(0,120,120)` |
+| 网页 | `http://<板子IP>/` 返回 200（实测 5789 B），2 s 轮询 `/api/status`；`POST /api/led` 可控灯 |
+| 分区 | OTA 布局生效：`ota_data_initial.bin` 烧在 `0xd000`，app 落在 `ota_0`（4 MiB 槽用了 22%） |
+
+> **未解决**：网页只在刚开机的一小段时间内响应，之后 TCP 能连上但服务端不回数据，再久一点直接超时。
+> 已排除固件崩溃（请求失败时串口没有 panic / 重启，灯仍按状态机刷新），当前最大嫌疑是掉线重连后被路由器换了 IP。
 
 ## 灯语
 
@@ -29,15 +33,36 @@
 ## 网页监控
 
 - `/` —— 深色面板：连接状态、IP、SSID/加密方式、RSSI、信道、运行时长、内部堆与 PSRAM 空闲、
-  外网连通、热点状态、接入设备列表，外加最近 60 次采样的信号强度柱状图。
-- `/api/status` —— 同样内容的 JSON，字段现取现算（`esp_wifi_sta_get_ap_info()` + 堆统计），
+  外网连通、热点状态、接入设备列表，最近 60 次采样的信号强度柱状图，外加一排手动点灯按钮。
+- `/api/status` —— 同样内容的 JSON，由 cJSON 现取现算（`esp_wifi_sta_get_ap_info()` + 堆统计），
   不做缓存，所以页面不会和驱动的实际状态漂移。
+- `/api/led` —— `POST`，`{"r":0-255,"g":0-255,"b":0-255,"hold_ms":0-600000}`，
+  覆盖链路颜色若干毫秒后自动交还状态机；`hold_ms:0` 立刻交还。这是留给外部大脑
+  （Home Assistant / 米家场景 / curl）控制的入口，见 [`../ROADMAP.md`](../ROADMAP.md)。
+  **无鉴权**，只应在局域网内暴露。
+- mDNS —— 板子应答 `http://<WIFI_LED_MDNS_HOSTNAME>.local/`（默认 `esp32-monitor`），
+  不用记住 DHCP 地址。个别 Windows 解析不了 `.local`，退回 IP 即可。
 
-嵌入的 HTML 用 C11 原始字符串字面量写在 `main/wifi_led_main.c` 里，不占 flash 分区以外的资源。
+页面标记在 `components/monitor_server/web_index.h`，用 C11 原始字符串字面量编译进固件，
+不占 SPIFFS 分区；`monitor_server.c` 里只有路由和 JSON，没有 HTML。
+
+## 工程结构
+
+```
+main/                 app_main.c 只做三件事：link_state_init / status_light_start / monitor_server_start
+components/
+  link_state/         Wi-Fi 上线、安全模式重试阶梯、外网探测、状态与 IP 发布
+  status_light/       WS2812 渲染 + 手动覆盖（依赖 espressif/led_strip）
+  monitor_server/     HTTP 页面与 API + mDNS（依赖 espressif/mdns）
+partitions.csv        nvs / otadata / phy_init / ota_0 / ota_1 / storage，给 OTA 留好了位
+```
+
+三个组件的依赖方向是单向的：`monitor_server` 和 `status_light` 都只读 `link_state`，
+`link_state` 不知道上面两位存在。加新功能时按这个方向放，不要出现回指。
 
 ## 关于板子自带热点（默认关闭）
 
-代码里保留了一个 SoftAP 兜底通道，但 **默认编译掉**（`# CONFIG_EXAMPLE_AP_ENABLE is not set`）。
+代码里保留了一个 SoftAP 兜底通道，但 **默认编译掉**（`# CONFIG_WIFI_LED_AP_ENABLE is not set`）。
 原因实测过一次，很坑：
 
 > SoftAP 起来后，电脑一连上它，Windows 就把默认网关切到 `192.168.4.1`（板子），
@@ -46,7 +71,7 @@
 
 判断依据是路由表：热点接口的 `0.0.0.0/0` 跃点是 0，有线网卡那个是 9999，必输。
 
-要临时打开：`main/Kconfig.projbuild` 里把 `EXAMPLE_AP_ENABLE` 设 y（SSID/密码也在同一处），
+要临时打开：`main/Kconfig.projbuild` 里把 `WIFI_LED_AP_ENABLE` 设 y（SSID/密码也在同一处），
 然后 `rm sdkconfig && idf.py build`。
 
 顺带纠正一个曾经的错误结论：这个光猫**有线口和无线口是通的**（同一个 `192.168.1.0/24`，
