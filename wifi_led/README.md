@@ -63,8 +63,9 @@ BLE 和网页共用同一条 `led_ctl_from_json()` / `build_status_json()` 路�
   自动走 BLE 长读，NimBLE 服务器自己处理，客户端不用做任何事。
 - 特征值明文、不配对：射频范围内任何人都能控灯——演示用途的取舍；
   以后要加密，给特征值加 `BLE_GATT_CHR_F_WRITE_ENC` 是小改。
-- 回归测试不用手机：仓库根目录 `python tools/ble_gatt_test.py`（先 `pip install bleak`），
-  直连开发板跑完上面全部路径。
+- 回归测试不用手机：仓库根目录建一次 venv 后直跑——
+  `python3 -m venv tools/.venv && tools/.venv/bin/pip install bleak`，
+  以后 `tools/.venv/bin/python tools/ble_gatt_test.py`（完整用法在脚本头部）。
 
 ## 网页监控
 

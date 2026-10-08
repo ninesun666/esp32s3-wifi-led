@@ -1,9 +1,13 @@
 """BLE GATT 回归测试：直连开发板跑完整控制链路（不依赖手机）。
 
-用法（板子在广播中、未连接其他设备时）：
+用法（板子在广播中、未连接其他设备时；macOS 没有裸 `python` 命令，
+bleak 也不让装进系统 Python，所以走仓库内 venv，一次性建好）：
 
-    pip install bleak
-    python tools/ble_gatt_test.py
+    python3 -m venv tools/.venv
+    tools/.venv/bin/pip install bleak
+    tools/.venv/bin/python tools/ble_gatt_test.py
+
+Windows 下把 bin/ 换成 Scripts\\（`tools\\.venv\\Scripts\\python tools\\ble_gatt_test.py`）。
 
 7 项检查：广播发现 → 连接 → 服务 UUID → 读状态 0003 →
 写 LED 0002 并读回 → 非法写收应用错误 0x81 → 断开后广播恢复。

@@ -13,6 +13,7 @@ ap_profile.xml
 # --- Host-side scratch, machine specific ---
 __pycache__/
 *.pyc
+tools/.venv/
 check_*.ps1
 list_*.ps1
 net_probe.ps1

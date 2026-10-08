@@ -8,7 +8,7 @@
 | [`wifi_led/`](wifi_led/README.md) | 主项目：Wi-Fi 状态灯 + HTTP 监控页 + BLE 控制 |
 | `idf_run.ps1` | Windows + Git Bash 下唯一能跑通 `idf.py` 的入口 |
 | `grab_log.py` | 抓 COM7 串口日志（含开机日志） |
-| [`tools/ble_gatt_test.py`](tools/ble_gatt_test.py) | BLE 回归测试（`pip install bleak` 后直连开发板，7 项检查） |
+| [`tools/ble_gatt_test.py`](tools/ble_gatt_test.py) | BLE 回归测试（bleak 直连开发板，7 项检查；用法见脚本头部） |
 | [`docs/`](docs/README.md) | 乐鑫官方手册（芯片规格书 v2.2、WROOM-1 模组手册、TRM，中文 PDF） |
 
 ## 硬件事实
