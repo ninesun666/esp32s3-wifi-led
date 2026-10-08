@@ -14,6 +14,11 @@
 | RGB 灯 | GPIO 48 上的 WS2812，物理确认会亮 |
 | 网页 | `http://<板子IP>/` 返回 200，2 s 轮询 `/api/status` |
 
+> 2026-10-08 起支持网页接管灯带，见下文「网页接管灯带」。
+> 同日 BLE 上板实测（Mac 原生 USB 烧录）：广播、连接（MTU 512）、LED 写入/读回、
+> 状态读取、非法写 0x81、断开重广播——7 项检查全过；SoftAP+BLE 同开时
+> 开机内部堆余 345 KiB（BLE 连接中降到约 183 KiB）。
+
 ## 灯语
 
 | 颜色 | 含义 |
@@ -25,6 +30,41 @@
 
 状态由 Wi-Fi/IP 事件回调写、由独立的 `led_task` 每 20 ms 刷一次。连接和外网探测都会阻塞，
 所以不能在主循环里点灯。
+
+## 网页接管灯带
+
+状态灯语可以被网页临时接管：`/api/led`（GET 读当前设定，POST 下发），
+POST 的 JSON 形如 `{"manual":true,"fx":"rainbow","rgb":[255,80,0],"brightness":60}`，
+`fx` 取 `solid / breathe / rainbow / off`。接管期间灯效完全由这份设定决定，
+不再反映链路状态；点页面上的「恢复自动」（或 POST `manual:false`）交还状态机。
+设定只存在 RAM 里，重启后回到自动状态色。控件在监控页底部的「灯带控制」卡片：
+取色器、亮度滑条、四个灯效按钮。共享设定由互斥锁保护，`led_task` 是灯的唯一写手。
+
+## BLE 控制（手机 nRF Connect）
+
+ESP32-S3 只有 BLE（没有经典蓝牙），手机系统蓝牙设置里搜不到，要用 nRF Connect 这类
+扫描器。固件起一个 NimBLE GATT 服务器（`start_ble()`，在 Wi-Fi 完全启动之后初始化，
+顺序照抄官方 Wi-Fi/BLE 共存示例；两个射频的空口分时由 IDF 共存层自动处理，零配置）。
+广播名 `ESP32-LED`，改 `main/Kconfig.projbuild` 里的 `EXAMPLE_BLE_NAME`。
+
+| 特征值（服务 `5d400001-7a9b-4c8e-b2f4-38a1c6e0d951`） | 权限 | 载荷 |
+| --- | --- | --- |
+| `…0002` LED | 读 / 写 | 与 `/api/led` 同款 JSON |
+| `…0003` 状态 | 只读 | 与 `/api/status` 同字段，去掉热点客户端列表 |
+
+写 `{"manual":true,"fx":"rainbow","rgb":[255,80,0],"brightness":60}` 到 0002，灯带立刻
+变彩虹，读回当前生效设定；写非法值（如 `{"fx":"disco"}`）收到应用层错误 0x81。
+读 0003 拿到 `{"state":"online","ssid":"…","ip":"…","rssi":…,…}` 现取现算。
+BLE 和网页共用同一条 `led_ctl_from_json()` / `build_status_json()` 路径——两边同时操作，
+看到的是同一份设定。
+
+- 单连接（`CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1`）：连上后暂停广播，断开自动恢复。
+- 状态 JSON 约 330 字节：协商到 512 MTU 的手机一次读走；MTU 较小的（iPhone 约 185）
+  自动走 BLE 长读，NimBLE 服务器自己处理，客户端不用做任何事。
+- 特征值明文、不配对：射频范围内任何人都能控灯——演示用途的取舍；
+  以后要加密，给特征值加 `BLE_GATT_CHR_F_WRITE_ENC` 是小改。
+- 回归测试不用手机：仓库根目录 `python tools/ble_gatt_test.py`（先 `pip install bleak`），
+  直连开发板跑完上面全部路径。
 
 ## 网页监控
 
@@ -81,3 +121,7 @@ python grab_log.py 90
 
 两份 defaults 的合并由 `CMakeLists.txt` 里 `project()` 之前的
 `set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.local")` 完成。
+
+BLE 的开关和广播名在 `main/Kconfig.projbuild`（`EXAMPLE_BLE_ENABLE` / `EXAMPLE_BLE_NAME`），
+NimBLE 细节（MTU 512、主机内存池放 PSRAM、单连接、裁掉不用角色/服务）在 `sdkconfig.defaults`。
+改这些同样要 `rm sdkconfig` 再 build。

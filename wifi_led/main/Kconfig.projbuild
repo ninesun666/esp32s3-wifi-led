@@ -53,4 +53,18 @@ menu "Wi-Fi LED example"
         depends on EXAMPLE_AP_ENABLE
         default "esp32test"
 
+    config EXAMPLE_BLE_ENABLE
+        bool "Run a BLE GATT server (LED control + device status)"
+        default y
+        help
+            NimBLE GATT server, usable from nRF Connect. One custom 128-bit
+            service: a read/write characteristic accepting the same JSON as
+            POST /api/led, and a read-only status JSON characteristic.
+            Wi-Fi/BLE coexistence is enabled automatically by ESP-IDF.
+
+    config EXAMPLE_BLE_NAME
+        string "BLE device name"
+        depends on EXAMPLE_BLE_ENABLE
+        default "ESP32-LED"
+
 endmenu

@@ -27,6 +27,7 @@ s.close()
 text = out.getvalue()
 print("bytes: %d" % len(text))
 KEYS = ("wifi_led", "reason", "scanning", "auth=", "connecting",
-        "got IP", "probe", "WS2812", "psram", "heap", "LED", "mac", "alive")
+        "got IP", "probe", "WS2812", "psram", "heap", "LED", "mac", "alive",
+        "BLE", "mtu", "adv")
 keep = [ln for ln in text.splitlines() if any(k in ln for k in KEYS)]
 print("\n".join(keep) if keep else "(no match; raw follows)\n" + text[-3000:])
