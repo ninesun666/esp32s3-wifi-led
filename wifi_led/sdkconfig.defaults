@@ -27,3 +27,13 @@ CONFIG_WIFI_LED_MDNS_HOSTNAME="esp32-monitor"
 
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+
+# --- esp_emote asset pack (CONFIG_WIFI_LED_TFT_EMOTE_ENABLE) ---
+# The asset index is built with 32-character names; if the runtime is compiled with
+# a different MMAP_FILE_NAME_LENGTH the pack loads with truncated/missing entries.
+CONFIG_MMAP_FILE_NAME_LENGTH=32
+# The 20px PuHuiCJK face font has far more than 8192 glyphs, which LVGL only
+# allows with the large text-format turned on.
+CONFIG_LV_FONT_FMT_TXT_LARGE=y
+# display_tft_start() mounts and parses a 2.4 MB asset pack on the main task.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192

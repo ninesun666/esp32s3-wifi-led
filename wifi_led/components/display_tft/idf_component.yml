@@ -1,0 +1,3 @@
+dependencies:
+  espressif2022/esp_emote_expression:
+    version: "^1.0.0"

@@ -27,6 +27,7 @@ static const char *TAG = "monitor_server";
 #define POST_BODY_MAX 192
 #define LED_HOLD_MAX 600000
 #define MAX_I2C_REPORT 8
+#define EMOTE_NAME_MAX 24
 
 static esp_err_t index_handler(httpd_req_t *req)
 {
@@ -77,6 +78,7 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "ap_stas", ap_stas);
     cJSON_AddStringToObject(root, "host", host);
     cJSON_AddBoolToObject(root, "screen_ready", display_tft_ready());
+    cJSON_AddBoolToObject(root, "emote_ready", display_tft_emote_ready());
 
 #if CONFIG_WIFI_LED_I2C_PROBE_ENABLE
     uint8_t addrs[MAX_I2C_REPORT];
@@ -186,8 +188,9 @@ static esp_err_t led_handler(httpd_req_t *req)
     return send_ok(req, true, NULL);
 }
 
-/* POST /api/screen {"r":255,"g":0,"b":0} repaints the whole TFT one colour;
- * {"pattern":"bars"} repaints the red/green/blue wiring-proof bars. */
+/* POST /api/screen {"emote":"happy"} shows a face from the anim_icon asset pack;
+ * {"r":255,"g":0,"b":0} repaints the whole TFT one colour; {"pattern":"bars"}
+ * repaints the red/green/blue wiring-proof bars. */
 static esp_err_t screen_handler(httpd_req_t *req)
 {
     cJSON *body = read_json_body(req);
@@ -199,21 +202,44 @@ static esp_err_t screen_handler(httpd_req_t *req)
     long g = json_int(body, "g", 0, 0, 255);
     long b = json_int(body, "b", 0, 0, 255);
     cJSON *pattern = cJSON_GetObjectItemCaseSensitive(body, "pattern");
+    cJSON *emote = cJSON_GetObjectItemCaseSensitive(body, "emote");
     bool bars = cJSON_IsString(pattern) && strcmp(pattern->valuestring, "bars") == 0;
+    char emote_name[EMOTE_NAME_MAX] = {0};
+    bool emote_too_long = false;
+    if (cJSON_IsString(emote)) {
+        emote_too_long = strlen(emote->valuestring) >= EMOTE_NAME_MAX;
+        if (!emote_too_long) {
+            strcpy(emote_name, emote->valuestring);
+        }
+    }
     cJSON_Delete(body);
 
     bool ok;
-    if (bars) {
+    const char *what;
+    const char *why = "panel not ready";
+    if (emote_name[0]) {
+        what = emote_name;
+        ok = display_tft_emote_show(emote_name);
+        if (!ok && display_tft_ready()) {
+            why = "no such emote in the asset pack";
+        }
+    } else if (emote_too_long) {
+        what = "emote (name too long)";
+        ok = false;
+        why = "emote name too long";
+    } else if (bars) {
+        what = "bars";
         ok = display_tft_ready();
         if (ok) {
             display_tft_bars();
         }
     } else {
+        what = "rgb fill";
         ok = display_tft_fill((uint8_t)r, (uint8_t)g, (uint8_t)b);
     }
 
-    ESP_LOGI(TAG, "screen <- %s %s", bars ? "bars" : "rgb fill", ok ? "painted" : "no panel");
-    return send_ok(req, ok, ok ? NULL : "panel not initialised");
+    ESP_LOGI(TAG, "screen <- %s %s", what, ok ? "done" : why);
+    return send_ok(req, ok, ok ? NULL : why);
 }
 
 static void start_mdns(void)

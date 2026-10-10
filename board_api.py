@@ -7,6 +7,7 @@ exactly the announced number of bytes.
   python board_api.py status
   python board_api.py screen 255 0 0
   python board_api.py screen bars
+  python board_api.py screen emote happy
   python board_api.py led 230 160 20 6000
 """
 import json
@@ -49,6 +50,9 @@ def main():
     elif what in ("screen", "led"):
         if what == "screen" and args[1:2] == ["bars"]:
             print(call("POST", "/api/screen", '{"pattern":"bars"}'))
+            return
+        if what == "screen" and args[1:2] == ["emote"]:
+            print(call("POST", "/api/screen", json.dumps({"emote": args[2]})))
             return
         r, g, b = (int(x) for x in args[1:4])
         payload = {"r": r, "g": g, "b": b}

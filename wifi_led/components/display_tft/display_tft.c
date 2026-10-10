@@ -20,6 +20,10 @@
 
 #include "display_tft.h"
 
+#if CONFIG_WIFI_LED_TFT_EMOTE_ENABLE
+#include "expression_emote.h"
+#endif
+
 static const char *TAG = "display_tft";
 
 #define BYTES_PER_PIXEL 2
@@ -27,9 +31,39 @@ static const char *TAG = "display_tft";
 #define STRIP_PIXELS    (CONFIG_WIFI_LED_TFT_WIDTH * STRIP_ROWS)
 
 static esp_lcd_panel_handle_t s_panel;
+static esp_lcd_panel_io_handle_t s_io;
 static uint16_t *s_strip;
 static int s_width = CONFIG_WIFI_LED_TFT_WIDTH;
 static int s_height = CONFIG_WIFI_LED_TFT_HEIGHT;
+
+#if CONFIG_WIFI_LED_TFT_EMOTE_ENABLE
+static emote_handle_t s_emote;
+
+/* The gfx lock is what the render task holds while it waits for a flush, so
+ * taking it is also the cheapest way to prove no renderer transaction is in
+ * flight before drawing over its face. */
+static void panel_lock(void)
+{
+    if (s_emote) {
+        emote_lock(s_emote);
+    }
+}
+
+static void panel_unlock(void)
+{
+    if (s_emote) {
+        emote_unlock(s_emote);
+    }
+}
+#else
+static void panel_lock(void)
+{
+}
+
+static void panel_unlock(void)
+{
+}
+#endif
 
 bool display_tft_ready(void)
 {
@@ -57,15 +91,23 @@ bool display_tft_fill(uint8_t r, uint8_t g, uint8_t b)
         return false;
     }
 
+    display_tft_emote_visible(false);
+
     uint16_t px = rgb565(r, g, b);
     for (int i = 0; i < STRIP_PIXELS; i++) {
         s_strip[i] = px;
     }
 
+    panel_lock();
     for (int y = 0; y < s_height; y += STRIP_ROWS) {
         int rows = s_height - y < STRIP_ROWS ? s_height - y : STRIP_ROWS;
-        esp_lcd_panel_draw_bitmap(s_panel, 0, y, s_width, y + rows, s_strip);
+        esp_err_t err = esp_lcd_panel_draw_bitmap(s_panel, 0, y, s_width, y + rows, s_strip);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "fill strip at y=%d failed: %s", y, esp_err_to_name(err));
+            break;
+        }
     }
+    panel_unlock();
     return true;
 }
 
@@ -79,6 +121,9 @@ void display_tft_bars(void)
         return;
     }
 
+    display_tft_emote_visible(false);
+
+    panel_lock();
     for (int y = 0; y < s_height; y += STRIP_ROWS) {
         int rows = s_height - y < STRIP_ROWS ? s_height - y : STRIP_ROWS;
         for (int i = 0; i < s_width * rows; i++) {
@@ -87,9 +132,149 @@ void display_tft_bars(void)
                                          : (x < 2 * s_width / 3 ? rgb565(0, 255, 0)
                                                                 : rgb565(0, 0, 255));
         }
-        esp_lcd_panel_draw_bitmap(s_panel, 0, y, s_width, y + rows, s_strip);
+        esp_err_t err = esp_lcd_panel_draw_bitmap(s_panel, 0, y, s_width, y + rows, s_strip);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "bars strip at y=%d failed: %s", y, esp_err_to_name(err));
+            break;
+        }
+    }
+    panel_unlock();
+}
+
+#if CONFIG_WIFI_LED_TFT_EMOTE_ENABLE
+
+/* The panel io announces *every* finished transaction, including the strip draws
+ * started by display_tft_fill() and display_tft_bars(). The renderer wants exactly
+ * one acknowledgement per flush it asks for, so the announces have to be sorted:
+ * this is set only while a transaction came from emote_flush(). */
+static volatile bool s_emote_awaits_ack;
+
+/* The renderer hands over RGB565 chunks and blocks until the panel says the
+ * bytes are gone, so the transfer-done callback is part of the contract, not
+ * an optimisation -- forget it and the render task stalls on the first frame. */
+static void emote_flush(int x_start, int y_start, int x_end, int y_end, const void *data,
+                        emote_handle_t handle)
+{
+    s_emote_awaits_ack = true;
+    esp_err_t err = esp_lcd_panel_draw_bitmap(s_panel, x_start, y_start, x_end, y_end, data);
+    if (err != ESP_OK) {
+        /* No transaction went out, so no transfer-done will ever arrive to ack it.
+         * Ack now anyway: the render task is waiting on this signal while holding
+         * the gfx lock, and the HTTP handlers wait on that same lock. */
+        s_emote_awaits_ack = false;
+        ESP_LOGE(TAG, "emote flush %dx%d failed: %s", x_end - x_start, y_end - y_start,
+                 esp_err_to_name(err));
+        emote_notify_flush_finished(handle);
     }
 }
+
+static bool emote_trans_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t *edata,
+                             void *user_ctx)
+{
+    (void)io;
+    (void)edata;
+    if (s_emote_awaits_ack) {
+        s_emote_awaits_ack = false;
+        emote_notify_flush_finished((emote_handle_t)user_ctx);
+    }
+    return true;
+}
+
+static bool emote_bring_up(void)
+{
+    emote_config_t cfg = {
+        /* swap: the S3 SPI path expects big-endian RGB565 on the wire. */
+        .flags = { .swap = true, .double_buffer = true, .buff_dma = true },
+        .gfx_emote = { .h_res = s_width, .v_res = s_height, .fps = 20 },
+        .buffers = { .buf_pixels = (size_t)s_width * 16 },
+        .task = {
+            .task_priority = 5,
+            .task_stack = 6 * 1024,
+            .task_affinity = -1,
+            .task_stack_in_ext = false,
+        },
+        .flush_cb = emote_flush,
+    };
+
+    s_emote = emote_init(&cfg);
+    if (!s_emote) {
+        ESP_LOGE(TAG, "emote_init failed");
+        return false;
+    }
+
+    const esp_lcd_panel_io_callbacks_t cbs = { .on_color_trans_done = emote_trans_done };
+    esp_err_t err = esp_lcd_panel_io_register_event_callbacks(s_io, &cbs, s_emote);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "flush-ready callback not registered: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    emote_data_t assets = {
+        .type = EMOTE_SOURCE_PARTITION,
+        .source = { .partition_label = CONFIG_WIFI_LED_TFT_EMOTE_PARTITION },
+        .flags = { .mmap_enable = true },
+    };
+    err = emote_mount_and_load_assets(s_emote, &assets);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "assets from partition '%s' failed: %s -- flash the anim_icon partition",
+                 CONFIG_WIFI_LED_TFT_EMOTE_PARTITION, esp_err_to_name(err));
+        return false;
+    }
+
+    ESP_LOGI(TAG, "emote ready: %dx%d, assets in partition %s",
+             s_width, s_height, CONFIG_WIFI_LED_TFT_EMOTE_PARTITION);
+    return true;
+}
+
+bool display_tft_emote_show(const char *name)
+{
+    if (!s_emote || !name) {
+        return false;
+    }
+
+    /* Reject names the asset pack does not carry before touching the renderer, so
+     * a typo in an API call answers with false instead of half-drawing. */
+    emoji_data_t *emoji = NULL;
+    if (emote_get_emoji_data_by_name(s_emote, name, &emoji) != ESP_OK || !emoji) {
+        ESP_LOGW(TAG, "no such emote in the asset pack: %s", name);
+        return false;
+    }
+
+    display_tft_emote_visible(true);
+    return emote_set_anim_emoji(s_emote, name) == ESP_OK;
+}
+
+void display_tft_emote_visible(bool visible)
+{
+    if (s_emote) {
+        emote_set_anim_visible(s_emote, visible);
+    }
+}
+
+bool display_tft_emote_ready(void)
+{
+    return s_emote != NULL;
+}
+
+#else  /* !CONFIG_WIFI_LED_TFT_EMOTE_ENABLE */
+
+bool display_tft_emote_show(const char *name)
+{
+    (void)name;
+    return false;
+}
+
+bool display_tft_emote_ready(void)
+{
+    return false;
+}
+
+void display_tft_emote_visible(bool visible)
+{
+    (void)visible;
+}
+
+#endif
 
 static void backlight_on(void)
 {
@@ -133,7 +318,7 @@ static esp_err_t bring_up(void)
     if (err != ESP_OK) {
         return err;
     }
-
+    s_io = io;
     esp_lcd_panel_dev_config_t panel_cfg = {
         .reset_gpio_num = CONFIG_WIFI_LED_TFT_RST_GPIO,
         .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
@@ -174,5 +359,11 @@ void display_tft_start(void)
              CONFIG_WIFI_LED_TFT_RST_GPIO, CONFIG_WIFI_LED_TFT_SPI_HZ / 1000);
 
     display_tft_bars();
+
+#if CONFIG_WIFI_LED_TFT_EMOTE_ENABLE
+    if (emote_bring_up()) {
+        display_tft_emote_show("happy");
+    }
+#endif
 #endif
 }

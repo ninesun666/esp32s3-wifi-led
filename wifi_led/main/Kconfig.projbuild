@@ -128,6 +128,21 @@ menu "Wi-Fi LED monitor"
             20 MHz is the safe number for pins routed through the GPIO matrix.
             SCLK=12 / MOSI=11 / CS=10 are the SPI2 IO_MUX pins and can take 40 MHz.
 
+    config WIFI_LED_TFT_EMOTE_ENABLE
+        bool "Render emoji through esp_emote_expression"
+        depends on WIFI_LED_TFT_ENABLE
+        default y
+        help
+            Brings in the esp_emote graphics stack (LVGL, freetype, jpeg) and loads the
+            asset pack from the anim_icon data partition, which main/CMakeLists.txt
+            generates from assets/240_240 at build time. Boot then paints the RGB bars
+            first and hands the panel to the face renderer.
+
+    config WIFI_LED_TFT_EMOTE_PARTITION
+        string "Emote asset partition label"
+        depends on WIFI_LED_TFT_EMOTE_ENABLE
+        default "anim_icon"
+
     config WIFI_LED_AP_ENABLE
         bool "Run a fallback SoftAP on the board"
         default n

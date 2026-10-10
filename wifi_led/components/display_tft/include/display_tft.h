@@ -11,8 +11,15 @@ bool display_tft_ready(void);
 int display_tft_width(void);
 int display_tft_height(void);
 
-/* Fill the whole panel with one colour; false when the panel is not up. */
+/* Fill the whole panel with one colour; false when the panel is not up.
+ * Hides the emoji face first, otherwise the renderer paints over it. */
 bool display_tft_fill(uint8_t r, uint8_t g, uint8_t b);
 
 /* Paint the red/green/blue vertical bars the boot sequence uses as wiring proof. */
 void display_tft_bars(void);
+
+/* Show one of the asset pack's emoji animations (happy, sad, angry, ...).
+ * False when CONFIG_WIFI_LED_TFT_EMOTE_ENABLE is off or the assets failed. */
+bool display_tft_emote_show(const char *name);
+bool display_tft_emote_ready(void);
+void display_tft_emote_visible(bool visible);

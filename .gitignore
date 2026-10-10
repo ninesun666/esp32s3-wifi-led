@@ -25,3 +25,9 @@ env_check.ps1
 env_check.txt
 hello_world/
 wifi_test/
+
+# --- 脚本产物 / 一次性草稿 ---
+*.log
+emote_boot.txt
+emote_soak.txt
+vibe_images/

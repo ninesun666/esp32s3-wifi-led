@@ -24,6 +24,12 @@ $env:IDF_PATH = 'C:\Espressif\frameworks\esp-idf-v5.3.5'
 
 if ($Port) { $env:ESPPORT = $Port }
 
+# Chinese Windows consoles are GBK, and idf.py pipes a child's stdout through a
+# GBK encoder: the asset pack script's own U+2713 tick kills the build with
+# UnicodeEncodeError after ninja has already done the work. Force UTF-8 on every
+# Python in the chain.
+$env:PYTHONIOENCODING = 'utf-8'
+
 if ($IdfArgs.Count -eq 0) {
     Write-Error "no idf.py action given (usage: idf_run.ps1 -Dir <project> [-Port COMx] <action ...>)"
     exit 2

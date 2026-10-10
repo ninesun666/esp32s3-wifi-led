@@ -71,6 +71,27 @@ h1{font-size:17px;margin:0 0 14px;font-weight:600}
 </div>
 <div id="scrmsg" style="color:#8b949e;font-size:12px;margin-top:6px"></div>
 </div>
+<div class="c" style="margin-top:10px" id="emotecard">
+<div class="k">屏上表情（esp_emote 动画，资源在 anim_icon 分区）</div>
+<div class="btns">
+<button onclick="setEmote('happy')">开心</button>
+<button onclick="setEmote('laughing')">大笑</button>
+<button onclick="setEmote('loving')">喜欢</button>
+<button onclick="setEmote('relaxed')">放松</button>
+<button onclick="setEmote('sad')">难过</button>
+<button onclick="setEmote('crying')">大哭</button>
+<button onclick="setEmote('angry')">生气</button>
+<button onclick="setEmote('surprised')">惊讶</button>
+<button onclick="setEmote('shocked')">震惊</button>
+<button onclick="setEmote('thinking')">思考</button>
+<button onclick="setEmote('confused')">困惑</button>
+<button onclick="setEmote('sleepy')">犯困</button>
+<button onclick="setEmote('winking')">眨眼</button>
+<button onclick="setEmote('neutral')">平静</button>
+<button onclick="setEmote('idle')">待机</button>
+</div>
+<div id="emsg" style="color:#8b949e;font-size:12px;margin-top:6px"></div>
+</div>
 <div class="foot" id="foot">等待数据…</div>
 <script>
 var hist=[];
@@ -85,15 +106,16 @@ async function setLed(r,g,b,hold){
   $('ledmsg').textContent=ok;
  }catch(e){$('ledmsg').textContent='发送失败：'+e}
 }
-async function paintScreen(body){
+async function paintScreen(body,target){
  try{
   var res=await fetch('/api/screen',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify(body)});
   var d=await res.json().catch(function(){return {}});
-  $('scrmsg').textContent=(res.ok&&d.ok)?('已刷屏 '+JSON.stringify(body)):('失败 HTTP '+res.status+' '+(d.error||''));
- }catch(e){$('scrmsg').textContent='发送失败：'+e}
+  $(target||'scrmsg').textContent=(res.ok&&d.ok)?('已刷屏 '+JSON.stringify(body)):('失败 HTTP '+res.status+' '+(d.error||''));
+ }catch(e){$(target||'scrmsg').textContent='发送失败：'+e}
 }
 function setScreen(r,g,b){paintScreen({r:r,g:g,b:b})}
+function setEmote(n){paintScreen({emote:n},'emsg')}
 async function tick(){
  try{
   var r=await fetch('/api/status',{cache:'no-store'});var d=await r.json();
@@ -109,6 +131,7 @@ async function tick(){
   $('aps').textContent=d.ap_ssid;$('api').textContent=d.ap_ip;
   $('apc').textContent=d.ap_stas;
   $('scr').textContent=d.screen_ready?'ST7789 就绪':'未就绪';
+  $('emotecard').style.display=d.emote_ready?'':'none';
   $('i2ccard').style.display=(d.i2c?'':'none');
   $('i2c').textContent=(d.i2c&&d.i2c.length)?d.i2c.join('、'):'无设备';
   $('i2cv').textContent=d.i2c_levels?('空闲电平 SDA '+(d.i2c_levels.sda?'高':'低')+' / SCL '+(d.i2c_levels.scl?'高':'低')):'';
