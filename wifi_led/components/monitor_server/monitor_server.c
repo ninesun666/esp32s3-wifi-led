@@ -17,13 +17,14 @@
 #include "mdns.h"
 #include "link_state.h"
 #include "status_light.h"
+#include "display_tft.h"
 #include "i2c_probe.h"
 #include "monitor_server.h"
 #include "web_index.h"
 
 static const char *TAG = "monitor_server";
 
-#define LED_BODY_MAX 192
+#define POST_BODY_MAX 192
 #define LED_HOLD_MAX 600000
 #define MAX_I2C_REPORT 8
 
@@ -75,7 +76,9 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddStringToObject(root, "ap_ip", ap_stas > 0 ? "192.168.4.1" : "-");
     cJSON_AddNumberToObject(root, "ap_stas", ap_stas);
     cJSON_AddStringToObject(root, "host", host);
+    cJSON_AddBoolToObject(root, "screen_ready", display_tft_ready());
 
+#if CONFIG_WIFI_LED_I2C_PROBE_ENABLE
     uint8_t addrs[MAX_I2C_REPORT];
     int n_addr = i2c_probe_list(addrs, MAX_I2C_REPORT);
     cJSON *i2c = cJSON_AddArrayToObject(root, "i2c");
@@ -84,6 +87,14 @@ static esp_err_t status_handler(httpd_req_t *req)
         sprintf(addr, "0x%02x", addrs[i]);
         cJSON_AddItemToArray(i2c, cJSON_CreateString(addr));
     }
+
+    bool sda_high, scl_high;
+    i2c_probe_levels(&sda_high, &scl_high);
+    cJSON *lvl = cJSON_CreateObject();
+    cJSON_AddBoolToObject(lvl, "sda", sda_high);
+    cJSON_AddBoolToObject(lvl, "scl", scl_high);
+    cJSON_AddItemToObject(root, "i2c_levels", lvl);
+#endif
 
     cJSON *list = cJSON_AddArrayToObject(root, "clients");
     for (int i = 0; i < ap_stas; i++) {
@@ -116,27 +127,51 @@ static long json_int(const cJSON *root, const char *key, long fallback, long lo,
     return v < lo ? lo : (v > hi ? hi : (long)v);
 }
 
-/* POST /api/led {"r":200,"g":40,"b":40,"hold_ms":5000} -- hold_ms 0 hands the
- * strip back to the link state machine. This is the hook an external brain
- * (Home Assistant, a 米家 scene, curl) drives the board through. */
-static esp_err_t led_handler(httpd_req_t *req)
+/* Shared body reader for the POST endpoints: small JSON, hard cap, no streaming. */
+static cJSON *read_json_body(httpd_req_t *req)
 {
-    if (req->content_len == 0 || req->content_len > LED_BODY_MAX) {
+    if (req->content_len == 0 || req->content_len > POST_BODY_MAX) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "body too large or empty");
-        return ESP_FAIL;
+        return NULL;
     }
 
-    char buf[LED_BODY_MAX + 1];
+    char buf[POST_BODY_MAX + 1];
     int got = httpd_req_recv(req, buf, (int)req->content_len);
     if (got <= 0) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "recv failed");
-        return ESP_FAIL;
+        return NULL;
     }
     buf[got] = '\0';
 
     cJSON *body = cJSON_Parse(buf);
     if (!body) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid JSON");
+    }
+    return body;
+}
+
+static esp_err_t send_ok(httpd_req_t *req, bool ok, const char *why)
+{
+    cJSON *ack = cJSON_CreateObject();
+    cJSON_AddBoolToObject(ack, "ok", ok);
+    if (why) {
+        cJSON_AddStringToObject(ack, "error", why);
+    }
+    char *text = cJSON_PrintUnformatted(ack);
+    cJSON_Delete(ack);
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t err = httpd_resp_sendstr(req, text ? text : "{}");
+    free(text);
+    return err;
+}
+
+/* POST /api/led {"r":200,"g":40,"b":40,"hold_ms":5000} -- hold_ms 0 hands the
+ * strip back to the link state machine. This is the hook an external brain
+ * (Home Assistant, a 米家 scene, curl) drives the board through. */
+static esp_err_t led_handler(httpd_req_t *req)
+{
+    cJSON *body = read_json_body(req);
+    if (!body) {
         return ESP_FAIL;
     }
 
@@ -148,16 +183,25 @@ static esp_err_t led_handler(httpd_req_t *req)
 
     status_light_override((uint8_t)r, (uint8_t)g, (uint8_t)b, (uint32_t)hold);
     ESP_LOGI(TAG, "led <- rgb(%ld,%ld,%ld) hold %ld ms", r, g, b, hold);
+    return send_ok(req, true, NULL);
+}
 
-    cJSON *ack = cJSON_CreateObject();
-    cJSON_AddBoolToObject(ack, "ok", true);
-    cJSON_AddBoolToObject(ack, "led_ready", status_light_ready());
-    char *text = cJSON_PrintUnformatted(ack);
-    cJSON_Delete(ack);
-    httpd_resp_set_type(req, "application/json");
-    esp_err_t err = httpd_resp_sendstr(req, text ? text : "{\"ok\":true}");
-    free(text);
-    return err;
+/* POST /api/screen {"r":255,"g":0,"b":0} -- repaint the whole TFT one colour. */
+static esp_err_t screen_handler(httpd_req_t *req)
+{
+    cJSON *body = read_json_body(req);
+    if (!body) {
+        return ESP_FAIL;
+    }
+
+    long r = json_int(body, "r", 0, 0, 255);
+    long g = json_int(body, "g", 0, 0, 255);
+    long b = json_int(body, "b", 0, 0, 255);
+    cJSON_Delete(body);
+
+    bool ok = display_tft_fill((uint8_t)r, (uint8_t)g, (uint8_t)b);
+    ESP_LOGI(TAG, "screen <- rgb(%ld,%ld,%ld) %s", r, g, b, ok ? "painted" : "no panel");
+    return send_ok(req, ok, ok ? NULL : "panel not initialised");
 }
 
 static void start_mdns(void)
@@ -195,6 +239,7 @@ void monitor_server_start(void)
         { .uri = "/",           .method = HTTP_GET,  .handler = index_handler },
         { .uri = "/api/status", .method = HTTP_GET,  .handler = status_handler },
         { .uri = "/api/led",    .method = HTTP_POST, .handler = led_handler },
+        { .uri = "/api/screen", .method = HTTP_POST, .handler = screen_handler },
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
         httpd_register_uri_handler(server, &uris[i]);

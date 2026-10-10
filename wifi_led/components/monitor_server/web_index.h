@@ -42,7 +42,8 @@ h1{font-size:17px;margin:0 0 14px;font-weight:600}
 <div class="c"><div class="k">外网连通</div><div class="v"><span id="net">-</span></div></div>
 <div class="c"><div class="k">板子热点</div><div class="v"><span id="aps">-</span> <small id="api"></small></div></div>
 <div class="c"><div class="k">接入板子的设备</div><div class="v"><span id="apc">-</span></div></div>
-<div class="c"><div class="k">I2C 总线（GPIO 8/9）</div><div class="v"><span id="i2c">-</span></div></div>
+<div class="c"><div class="k">外接屏幕</div><div class="v"><span id="scr">-</span></div></div>
+<div class="c" id="i2ccard" style="display:none"><div class="k">I2C 总线（GPIO 8/9）</div><div class="v"><span id="i2c">-</span> <small id="i2cv"></small></div></div>
 </div>
 <div class="c" style="margin-top:10px"><div class="k">信号历史（最近 60 次采样）</div><div class="spark" id="sp"></div></div>
 <div class="c" style="margin-top:10px"><div class="k">连接到板子热点的终端</div><div id="cl" style="color:#8b949e;font-size:13px">无</div></div>
@@ -56,6 +57,18 @@ h1{font-size:17px;margin:0 0 14px;font-weight:600}
 <button onclick="setLed(0,0,0,0)">交还自动</button>
 </div>
 <div id="ledmsg" style="color:#8b949e;font-size:12px;margin-top:6px"></div>
+</div>
+<div class="c" style="margin-top:10px">
+<div class="k">手动刷屏（POST /api/screen，整屏纯色，一直保留到下一次刷）</div>
+<div class="btns">
+<button onclick="setScreen(0,0,0)">黑</button>
+<button onclick="setScreen(255,255,255)">白</button>
+<button onclick="setScreen(224,40,40)">红</button>
+<button onclick="setScreen(40,200,40)">绿</button>
+<button onclick="setScreen(40,90,240)">蓝</button>
+<button onclick="setScreen(230,180,40)">黄</button>
+</div>
+<div id="scrmsg" style="color:#8b949e;font-size:12px;margin-top:6px"></div>
 </div>
 <div class="foot" id="foot">等待数据…</div>
 <script>
@@ -71,6 +84,14 @@ async function setLed(r,g,b,hold){
   $('ledmsg').textContent=ok;
  }catch(e){$('ledmsg').textContent='发送失败：'+e}
 }
+async function setScreen(r,g,b){
+ try{
+  var res=await fetch('/api/screen',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({r:r,g:g,b:b})});
+  var d=await res.json().catch(function(){return {}});
+  $('scrmsg').textContent=(res.ok&&d.ok)?('已刷屏 rgb('+r+','+g+','+b+')'):('失败 HTTP '+res.status+' '+(d.error||''));
+ }catch(e){$('scrmsg').textContent='发送失败：'+e}
+}
 async function tick(){
  try{
   var r=await fetch('/api/status',{cache:'no-store'});var d=await r.json();
@@ -85,7 +106,10 @@ async function tick(){
   $('net').textContent=d.internet?'通':'不通';
   $('aps').textContent=d.ap_ssid;$('api').textContent=d.ap_ip;
   $('apc').textContent=d.ap_stas;
+  $('scr').textContent=d.screen_ready?'ST7789 就绪':'未就绪';
+  $('i2ccard').style.display=(d.i2c?'':'none');
   $('i2c').textContent=(d.i2c&&d.i2c.length)?d.i2c.join('、'):'无设备';
+  $('i2cv').textContent=d.i2c_levels?('空闲电平 SDA '+(d.i2c_levels.sda?'高':'低')+' / SCL '+(d.i2c_levels.scl?'高':'低')):'';
   $('cl').innerHTML=(d.clients||[]).map(function(c){
     return '<div>'+c.mac+' &middot; '+c.rssi+' dBm</div>'}).join('')||'无';
   hist.push(d.rssi);if(hist.length>60)hist.shift();

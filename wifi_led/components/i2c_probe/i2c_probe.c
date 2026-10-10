@@ -10,6 +10,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "esp_log.h"
 #include "i2c_probe.h"
@@ -26,6 +27,8 @@ static const char *TAG = "i2c_probe";
 static i2c_master_bus_handle_t s_bus;
 static uint8_t s_found[MAX_FOUND];
 static int s_found_n;
+static bool s_sda_high;
+static bool s_scl_high;
 
 int i2c_probe_list(uint8_t *out, int max)
 {
@@ -34,6 +37,46 @@ int i2c_probe_list(uint8_t *out, int max)
         memcpy(out, s_found, n);
     }
     return n;
+}
+
+void i2c_probe_levels(bool *sda_high, bool *scl_high)
+{
+    if (sda_high) {
+        *sda_high = s_sda_high;
+    }
+    if (scl_high) {
+        *scl_high = s_scl_high;
+    }
+}
+
+/* A free I2C bus idles HIGH. Measured with no pull of our own and nothing driven,
+ * that says whether a module is even attached: an unconnected pin floats to a
+ * random level, and a module with no supply cannot hold the line up either. This
+ * is what separates a real slave from the phantom ACKs a floating bus produces. */
+static void measure_idle_levels(void)
+{
+    const int pins[2] = { CONFIG_WIFI_LED_I2C_SDA_GPIO, CONFIG_WIFI_LED_I2C_SCL_GPIO };
+    bool high[2];
+
+    for (int i = 0; i < 2; i++) {
+        gpio_reset_pin(pins[i]);
+        gpio_set_direction(pins[i], GPIO_MODE_INPUT);
+        gpio_set_pull_mode(pins[i], GPIO_FLOATING);
+    }
+    vTaskDelay(pdMS_TO_TICKS(2));
+    for (int i = 0; i < 2; i++) {
+        high[i] = gpio_get_level(pins[i]) == 1;
+    }
+    for (int i = 0; i < 2; i++) {
+        gpio_reset_pin(pins[i]);
+    }
+
+    s_sda_high = high[0];
+    s_scl_high = high[1];
+    ESP_LOGI(TAG, "idle levels with no pull-up: SDA=%d SCL=%d (%s)",
+             s_sda_high, s_scl_high,
+             (s_sda_high && s_scl_high) ? "pulled up externally"
+                                        : "floating or held low -- nothing attached, or mis-wired");
 }
 
 static void describe(uint8_t addr)
@@ -110,6 +153,8 @@ static void probe_task(void *arg)
 
 void i2c_probe_start(void)
 {
+    measure_idle_levels();
+
     i2c_master_bus_config_t cfg = {
         .i2c_port = I2C_NUM_0,
         .sda_io_num = CONFIG_WIFI_LED_I2C_SDA_GPIO,

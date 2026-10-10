@@ -44,35 +44,41 @@
 | `POST /api/led` | 200 + `{"ok":true}`，坏 body 回 400 |
 | 灯 | 手动橙 `(230,160,20)` 覆盖 6 s 后交还青色状态机 |
 
-## 现在卡在哪：外接那块屏
+## 现在卡在哪：外接那块屏（已确认是 SPI TFT，只差 4 根线）
 
-面包板上那块 8 针模块（丝印 `GND VCC SCL SDA RES DC CS BLK`）**还没接线**，而且它到底
-是 I2C 的 OLED（SSD1306/SH1106）还是 SPI 的 TFT（ST7735 那一类，`BLK` 背光线就是暗示）
-不能靠丝印确定 —— 所以不要先写驱动，先用总线扫描把它问出来。
+2026-10-10 用户给出商品页：**1.54 寸 240×240 IPS，驱动 IC = ST7789，4 线 SPI**，
+8 针定义 `1.GND 2.VCC 3.SCL(时钟) 4.SDA(数据) 5.RES 6.DC 7.CS 8.BLK(背光，默认悬空，低电平关)`，3.3 V。
+所以之前按丝印猜的"I2C OLED"**是错的**，`i2c_probe` 在这块屏上没有意义，已默认关掉
+（`WIFI_LED_I2C_PROBE_ENABLE=n`，GPIO 8/9 现在是 SPI 的 SCLK/MOSI）。
 
-已经为此铺好的路：`components/i2c_probe` 在 GPIO 8(SDA)/9(SCL) 上扫 0x08–0x77，
-**同一地址连续两次 ACK 才算数**（空总线浮出会报假地址，实测到过幽灵 `0x0b`），
-没扫到就每 5 秒重扫，结果同时进串口日志、`/api/status` 的 `i2c` 字段和网页卡片。
-接线 → 刷网页就能看到，不用重烧、不用开串口。
+驱动已经写完并烧进去了，用的不是 registry 组件而是 **IDF 自带的 `esp_lcd` ST7789 面板驱动**
+（`components/display_tft`，SPI2 + `esp_lcd_new_panel_st7789()`）—— 这台电脑当时没有外网，
+拉不到 `espressif/esp_lcd_st7789`，而 IDF 内置版本本来就应该先查。
 
-| 模块引脚 | 接到 | 说明 |
-| --- | --- | --- |
-| VCC | 3V3 | 别接 5V，总线电平是 3.3 V |
-| GND | GND | |
-| SCL | GPIO 9 | `WIFI_LED_I2C_SCL_GPIO` |
-| SDA | GPIO 8 | `WIFI_LED_I2C_SDA_GPIO`，开了内部弱上拉 |
-| RES / DC / CS / BLK | 先悬空 | 见下 |
+| 模块引脚 | 接到 | Kconfig | 状态 |
+| --- | --- | --- | --- |
+| GND | GND | | 已接 |
+| VCC | 3V3 | | 已接 |
+| SCL | GPIO 9 | `WIFI_LED_TFT_SCLK_GPIO` | 已接 |
+| SDA | GPIO 8 | `WIFI_LED_TFT_MOSI_GPIO` | 已接 |
+| RES | GPIO 4 | `WIFI_LED_TFT_RST_GPIO` | **待接** |
+| DC | GPIO 5 | `WIFI_LED_TFT_DC_GPIO` | **待接** |
+| CS | GPIO 6 | `WIFI_LED_TFT_CS_GPIO` | **待接** |
+| BLK | GPIO 7（或直连 3V3） | `WIFI_LED_TFT_BLK_GPIO` | **待接** |
 
-判读：
+BLK 是这块屏"为什么不亮"的第一嫌疑：**它悬空，而悬空等于背光关**。固件已经把 GPIO 7 拉高，
+所以要么接 GPIO 7，要么直接把 BLK 插到 3V3（`WIFI_LED_TFT_BLK_GPIO=-1` 表示后者）。
 
-- 卡片出现 `0x3c`（或 `0x3d`）→ I2C OLED，直接进驱动阶段。
-- 一直是 `无设备` → 模块被硬 Strap 成 SPI 模式，把 `CS→GND`、`DC→GND`、`RES→3V3` 补上再刷一次；
-  仍然不应答就是 SPI TFT，得改走 SPI 四线（SCL=SCK、SDA=MOSI）+ `DC/CS/RES/BLK`。
+已经验过的（2026-10-10，板子 uptime 23 s）：
 
-驱动阶段还有一件事要记着：**这台电脑当前没有外网**（Clash 在 TUN 里给 fake-IP，节点不通，
-`curl` 全是 000），所以 `espressif/ssd1306` 这类 registry 组件拉不下来。要么先把代理修好走
-现成组件，要么用 IDF 自带的 `esp_driver_i2c` + 1 KiB 帧缓冲手写（约 150 行 + 6x8 字模）。
-默认走前者 —— 别自己造轮子，这条是规矩。
+- 开机日志 `display_tft: ST7789 240x240 on SCLK=9 MOSI=8 DC=5 CS=6 RST=4 at 20000 kHz`
+- `GET /api/status` → `screen_ready: true`、`led_ready: true`、内部堆 205 KiB 空闲
+- `POST /api/screen {"r":..,"g":..,"b":..}` 红/绿/蓝/白全部 `200 {"ok":true}`
+
+**剩下的验收是物理的**：接完那 4 根线，屏上应该出现左中右**红/绿/蓝三色竖条**（开机自绘，
+是接线正确的证据）；网页"手动刷屏"按钮换色后仍然正确，说明 DC/CS 没接反。
+三色条花乱或整体偏移 → 引脚表错了；全黑但背光亮 → 数据没进去；全白 → 忘开反色
+（本驱动固定 `esp_lcd_panel_invert_color(true)`，IPS 屏不开就是负片）。
 
 ## 当前主线：小智（xiaozhi-esp32）语音助手
 
@@ -126,6 +132,11 @@ curl -X POST -H "Content-Type: application/json" \
 7. **`http://esp32-monitor.local/` 在这台 Windows 上解析不出来**（`Resolve-DnsName` 无答案，
    Windows 不带头 mDNS 解析，LLMNR 也不应答 ESP32 的公告）。手机 / macOS 上可以。
    验收时用 IP，不要把 `.local` 失败当成固件坏了。
+8. **验收脚本不要"读到连接关闭为止"**。`esp_http_server` 收到 `Connection: close` 也不会
+   主动关，它按 `Content-Length` 把响应发完就静默。所以"发完请求 recv 到 EOF"这种写法会
+   一直超时，看起来像板子挂了 —— 2026-10-10 就被这个骗过一次，实际响应 **0.1 秒就完整到了**。
+   正确做法：解析头部 `Content-Length`，读够字节就走（`board_api.py` 就是这么写的）。
+   同一次误判里还有第 5 条叠加：开串口把板子复位了，紧接着的请求撞进开机窗口。
 
 ## 结构约定（本次改造立的，后续照这个长）
 
@@ -135,6 +146,8 @@ wifi_led/
   components/
     link_state/      Wi-Fi 上线、安全模式重试阶梯、外网探测、状态发布
     status_light/    WS2812 渲染 + 手动覆盖接口
+    display_tft/     ST7789 240x240 SPI 屏（IDF 内置 esp_lcd 面板驱动）+ /api/screen 后端
+    i2c_probe/       总线扫描，认外接模块用；默认编译关闭
     monitor_server/  HTTP 页面与 API、mDNS
   partitions.csv     otadata + 双 app 槽，给 OTA 留位
   sdkconfig.defaults 硬件事实（提交）

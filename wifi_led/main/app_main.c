@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "link_state.h"
 #include "status_light.h"
+#include "display_tft.h"
 #include "monitor_server.h"
 #include "i2c_probe.h"
 
@@ -19,7 +20,10 @@ void app_main(void)
 
     link_state_init();
     status_light_start();
+    display_tft_start();
+#if CONFIG_WIFI_LED_I2C_PROBE_ENABLE
     i2c_probe_start();
+#endif
     monitor_server_start();
 
     ESP_LOGI(TAG, "LED breathing blue = still connecting");
