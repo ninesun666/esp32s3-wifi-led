@@ -17,6 +17,7 @@
 #include "mdns.h"
 #include "link_state.h"
 #include "status_light.h"
+#include "i2c_probe.h"
 #include "monitor_server.h"
 #include "web_index.h"
 
@@ -24,6 +25,7 @@ static const char *TAG = "monitor_server";
 
 #define LED_BODY_MAX 192
 #define LED_HOLD_MAX 600000
+#define MAX_I2C_REPORT 8
 
 static esp_err_t index_handler(httpd_req_t *req)
 {
@@ -73,6 +75,15 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddStringToObject(root, "ap_ip", ap_stas > 0 ? "192.168.4.1" : "-");
     cJSON_AddNumberToObject(root, "ap_stas", ap_stas);
     cJSON_AddStringToObject(root, "host", host);
+
+    uint8_t addrs[MAX_I2C_REPORT];
+    int n_addr = i2c_probe_list(addrs, MAX_I2C_REPORT);
+    cJSON *i2c = cJSON_AddArrayToObject(root, "i2c");
+    for (int i = 0; i < n_addr; i++) {
+        char addr[8];
+        sprintf(addr, "0x%02x", addrs[i]);
+        cJSON_AddItemToArray(i2c, cJSON_CreateString(addr));
+    }
 
     cJSON *list = cJSON_AddArrayToObject(root, "clients");
     for (int i = 0; i < ap_stas; i++) {

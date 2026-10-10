@@ -46,6 +46,20 @@ menu "Wi-Fi LED monitor"
             page is reachable without tracking the DHCP address. Some Windows
             resolvers do not implement mDNS; fall back to the printed IP.
 
+    config WIFI_LED_I2C_SDA_GPIO
+        int "External I2C module SDA GPIO"
+        range 0 48
+        default 8
+        help
+            Data line of the I2C bus the OLED/display module goes on.
+            Free choices on this board: 0-21 and 38-48 minus 19/20 (native USB),
+            43/44 (UART console), 48 (onboard WS2812) and 26-37 (Octal PSRAM).
+
+    config WIFI_LED_I2C_SCL_GPIO
+        int "External I2C module SCL GPIO"
+        range 0 48
+        default 9
+
     config WIFI_LED_AP_ENABLE
         bool "Run a fallback SoftAP on the board"
         default n

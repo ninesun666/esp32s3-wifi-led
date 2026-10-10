@@ -9,6 +9,7 @@
 #include "link_state.h"
 #include "status_light.h"
 #include "monitor_server.h"
+#include "i2c_probe.h"
 
 static const char *TAG = "wifi_led";
 
@@ -18,6 +19,7 @@ void app_main(void)
 
     link_state_init();
     status_light_start();
+    i2c_probe_start();
     monitor_server_start();
 
     ESP_LOGI(TAG, "LED breathing blue = still connecting");

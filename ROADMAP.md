@@ -20,35 +20,59 @@
 | 网页监控 | `esp_http_server` 提供仪表盘 + `/api/status`，手机/电脑连同一个 Wi-Fi 直接访问 |
 | 发布 | 已推到 GitHub 私有仓库，不含任何真实凭据 |
 
-## 接力第一步：把新固件烧进去（2026-10-08 00:10 的状态）
+## 接力第一步：把新固件烧进去 —— 已完成（2026-10-08 00:40）
 
-代码重构已完成、编译产物是对的，但**板子上跑的仍是重构前的旧固件**。证据（LAN 实测）：
+结论先说：**之前那次"烧录成功"是假的**，板子跑的一直是重构前的镜像。成因不是编译，
+是启动器被 PowerShell 的参数绑定坑了两次：
 
-- `GET http://<板子IP>/api/status` 返回的 JSON 里**没有** `led_ready` 和 `host` 两个字段；
-- `POST /api/led` 回 `404 Nothing matches the given URI`；
-- 而 `wifi_led/build/wifi_led.bin`（909,136 B）里 `strings` 能搜到 3 处 `/api/led` 和 `esp32-monitor`。
+1. `-p COM7` 这种未知短选项会被 PowerShell 整个丢掉，idf.py 收不到端口就去自动探测，
+   探到的是蓝牙虚拟串口（板子没插 USB 时机器上只剩 COM3/COM4 两个 `BTHENUM` 口）。
+2. 更阴的：脚本参数**默认按声明顺序做位置绑定**，所以加了 `[string]$Port` 之后，
+   `-Dir wifi_led build` 里的 `build` 被塞给了 `-Port`，`idf.py` 收到空动作，
+   只打印一遍 usage 就返回 **exit 0**。
 
-原因不是编译，是**烧录根本没执行到这块板子**：
+修法：`idf_run.ps1` 改成手写 `$args` 解析，不再有声明式参数参与绑定；
+`-Port COM7`（内部转 `ESPPORT`）和原样透传的 `-p COM7` 现在都对；
+没有动作时脚本自己报错退出，不会再"静默成功"。
 
-```
-powershell -File idf_run.ps1 -Dir wifi_led -p COM7 flash
-→ 脚本收到的剩余参数只有 "flash"
-```
+验收证据（都是量出来的，不是"命令返回 0"）：
 
-`-p COM7` 被 PowerShell 自己吞掉了（未知短选项进不了 `ValueFromRemainingArguments`），
-idf.py 没拿到端口就去自动探测，探到的是蓝牙虚拟串口（这台机器上只有 COM3/COM4，
-全是 `BTHENUM\{00001101-...}`，CH343 根本不在设备树里 —— 板子的 USB 数据线没插，或那根线只供电）。
+| 检查 | 结果 |
+| --- | --- |
+| 烧录 | app 924,080 B @0x10000、otadata @0xd000、分区表 @0x8000，全部 `Hash of data verified` |
+| `GET /api/status` | 出现 `led_ready:true` 与 `host:"esp32-monitor.local"` |
+| `POST /api/led` | 200 + `{"ok":true}`，坏 body 回 400 |
+| 灯 | 手动橙 `(230,160,20)` 覆盖 6 s 后交还青色状态机 |
 
-所以接手的人照这个顺序做：
+## 现在卡在哪：外接那块屏
 
-1. 插好 USB 数据线，`[System.IO.Ports.SerialPort]::GetPortNames()` 里要出现 CH343 那个口。
-2. `cmd //c "powershell -NoProfile -ExecutionPolicy Bypass -File idf_run.ps1 -Dir wifi_led -Port COM7 flash"`
-   —— 端口必须走 `-Port`（内部转成 `ESPPORT` 环境变量，见 idf.py `serial_ext.py`），**不要写 `-p COM7`**。
-3. 验收：`/api/status` 出现 `led_ready` 与 `host`，`POST /api/led` 回 200 且灯真的变色，
-   串口日志里有 `mDNS: http://esp32-monitor.local:80/`。
-4. 烧完再复查一次 OTA：`idf.py partition-table` 应列出 `otadata` + `ota_0` + `ota_1`。
+面包板上那块 8 针模块（丝印 `GND VCC SCL SDA RES DC CS BLK`）**还没接线**，而且它到底
+是 I2C 的 OLED（SSD1306/SH1106）还是 SPI 的 TFT（ST7735 那一类，`BLK` 背光线就是暗示）
+不能靠丝印确定 —— 所以不要先写驱动，先用总线扫描把它问出来。
 
-`-Port` 参数已经加进 `idf_run.ps1`；旧代码是 `Set-Location $Dir; idf.py @IdfArgs`。
+已经为此铺好的路：`components/i2c_probe` 在 GPIO 8(SDA)/9(SCL) 上扫 0x08–0x77，
+**同一地址连续两次 ACK 才算数**（空总线浮出会报假地址，实测到过幽灵 `0x0b`），
+没扫到就每 5 秒重扫，结果同时进串口日志、`/api/status` 的 `i2c` 字段和网页卡片。
+接线 → 刷网页就能看到，不用重烧、不用开串口。
+
+| 模块引脚 | 接到 | 说明 |
+| --- | --- | --- |
+| VCC | 3V3 | 别接 5V，总线电平是 3.3 V |
+| GND | GND | |
+| SCL | GPIO 9 | `WIFI_LED_I2C_SCL_GPIO` |
+| SDA | GPIO 8 | `WIFI_LED_I2C_SDA_GPIO`，开了内部弱上拉 |
+| RES / DC / CS / BLK | 先悬空 | 见下 |
+
+判读：
+
+- 卡片出现 `0x3c`（或 `0x3d`）→ I2C OLED，直接进驱动阶段。
+- 一直是 `无设备` → 模块被硬 Strap 成 SPI 模式，把 `CS→GND`、`DC→GND`、`RES→3V3` 补上再刷一次；
+  仍然不应答就是 SPI TFT，得改走 SPI 四线（SCL=SCK、SDA=MOSI）+ `DC/CS/RES/BLK`。
+
+驱动阶段还有一件事要记着：**这台电脑当前没有外网**（Clash 在 TUN 里给 fake-IP，节点不通，
+`curl` 全是 000），所以 `espressif/ssd1306` 这类 registry 组件拉不下来。要么先把代理修好走
+现成组件，要么用 IDF 自带的 `esp_driver_i2c` + 1 KiB 帧缓冲手写（约 150 行 + 6x8 字模）。
+默认走前者 —— 别自己造轮子，这条是规矩。
 
 ## 当前主线：小智（xiaozhi-esp32）语音助手
 

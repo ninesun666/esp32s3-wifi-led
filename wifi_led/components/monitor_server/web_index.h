@@ -42,6 +42,7 @@ h1{font-size:17px;margin:0 0 14px;font-weight:600}
 <div class="c"><div class="k">外网连通</div><div class="v"><span id="net">-</span></div></div>
 <div class="c"><div class="k">板子热点</div><div class="v"><span id="aps">-</span> <small id="api"></small></div></div>
 <div class="c"><div class="k">接入板子的设备</div><div class="v"><span id="apc">-</span></div></div>
+<div class="c"><div class="k">I2C 总线（GPIO 8/9）</div><div class="v"><span id="i2c">-</span></div></div>
 </div>
 <div class="c" style="margin-top:10px"><div class="k">信号历史（最近 60 次采样）</div><div class="spark" id="sp"></div></div>
 <div class="c" style="margin-top:10px"><div class="k">连接到板子热点的终端</div><div id="cl" style="color:#8b949e;font-size:13px">无</div></div>
@@ -84,6 +85,7 @@ async function tick(){
   $('net').textContent=d.internet?'通':'不通';
   $('aps').textContent=d.ap_ssid;$('api').textContent=d.ap_ip;
   $('apc').textContent=d.ap_stas;
+  $('i2c').textContent=(d.i2c&&d.i2c.length)?d.i2c.join('、'):'无设备';
   $('cl').innerHTML=(d.clients||[]).map(function(c){
     return '<div>'+c.mac+' &middot; '+c.rssi+' dBm</div>'}).join('')||'无';
   hist.push(d.rssi);if(hist.length>60)hist.shift();

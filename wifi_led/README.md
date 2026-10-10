@@ -42,6 +42,9 @@
   **无鉴权**，只应在局域网内暴露。
 - mDNS —— 板子应答 `http://<WIFI_LED_MDNS_HOSTNAME>.local/`（默认 `esp32-monitor`），
   不用记住 DHCP 地址。个别 Windows 解析不了 `.local`，退回 IP 即可。
+- `i2c` 字段 / 页面"I2C 总线"卡片 —— `i2c_probe` 组件在 GPIO 8(SDA)/9(SCL) 上扫 0x08–0x77，
+  **同一个地址连续两次应答才算数**（空总线会浮出随机的假 ACK，实测过 0x0b 这种幽灵地址）。
+  没扫到就每 5 秒重扫，所以外接模块可以随时插上看网页，不用重新烧录、也不用开串口。
 
 页面标记在 `components/monitor_server/web_index.h`，用 C11 原始字符串字面量编译进固件，
 不占 SPIFFS 分区；`monitor_server.c` 里只有路由和 JSON，没有 HTML。
@@ -49,16 +52,17 @@
 ## 工程结构
 
 ```
-main/                 app_main.c 只做三件事：link_state_init / status_light_start / monitor_server_start
+main/                 app_main.c 只做接线：link_state_init / status_light_start / i2c_probe_start / monitor_server_start
 components/
   link_state/         Wi-Fi 上线、安全模式重试阶梯、外网探测、状态与 IP 发布
   status_light/       WS2812 渲染 + 手动覆盖（依赖 espressif/led_strip）
+  i2c_probe/          I2C 总线看门狗，识别外接模块是否应答（用 IDF 自带 esp_driver_i2c）
   monitor_server/     HTTP 页面与 API + mDNS（依赖 espressif/mdns）
 partitions.csv        nvs / otadata / phy_init / ota_0 / ota_1 / storage，给 OTA 留好了位
 ```
 
-三个组件的依赖方向是单向的：`monitor_server` 和 `status_light` 都只读 `link_state`，
-`link_state` 不知道上面两位存在。加新功能时按这个方向放，不要出现回指。
+组件之间的依赖方向是单向的：`monitor_server` 和 `status_light` 都只读 `link_state`，
+`i2c_probe` 谁也不读，`link_state` 不知道上面几位存在。加新功能时按这个方向放，不要出现回指。
 
 ## 关于板子自带热点（默认关闭）
 
@@ -81,10 +85,10 @@ partitions.csv        nvs / otadata / phy_init / ota_0 / ota_1 / storage，给 O
 ## 编译烧录
 
 Windows + Git Bash 下必须走 `idf_run.ps1`（直接跑 `idf.py` 会被 ESP-IDF 以
-`MSys/Mingw is not supported` 拒绝）。两个约定：工程目录用 `-Dir`（不叫 `-ProjectDir`，
-否则和 `idf.py` 自己的 `-p` 撞前缀）；**串口用 `-Port`，绝不能写 `-p COM7`** —— PowerShell
-会把未知的短选项整个丢掉，`idf.py` 收不到端口就去自动探测，结果是烧到别的设备或干脆没烧。
-`-Port` 内部转成 `ESPPORT` 环境变量传给 idf.py。
+`MSys/Mingw is not supported` 拒绝）。脚本自己解析参数（`$args`），因为 PowerShell 给声明式
+参数做位置绑定：`-Dir wifi_led build` 里的 `build` 会被吞进第二个 `[string]` 参数，
+`idf.py` 收到空动作就只打印 usage 然后返回 0 —— 这就是"烧录成功"其实什么都没烧的成因。
+端口两种写法都行：`-Port COM7`（内部转 `ESPPORT`）或原样透传 `idf.py` 的 `-p COM7`。
 
 ```bash
 # 在仓库根目录
