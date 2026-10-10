@@ -52,8 +52,10 @@
 （`WIFI_LED_I2C_PROBE_ENABLE=n`，GPIO 8/9 现在是 SPI 的 SCLK/MOSI）。
 
 驱动已经写完并烧进去了，用的不是 registry 组件而是 **IDF 自带的 `esp_lcd` ST7789 面板驱动**
-（`components/display_tft`，SPI2 + `esp_lcd_new_panel_st7789()`）—— 这台电脑当时没有外网，
+（`components/display_tft`，SPI2 + `esp_lcd_new_panel_st7789()`）—— 当时这台电脑没有外网，
 拉不到 `espressif/esp_lcd_st7789`，而 IDF 内置版本本来就应该先查。
+**2026-10-11 外网已经恢复**（`components.espressif.com` 与 github 都通），所以 registry 组件
+现在能拉，别再拿"离线"当手写驱动的理由。
 
 | 模块引脚 | 接到 | Kconfig | 状态 |
 | --- | --- | --- | --- |
@@ -79,6 +81,29 @@ BLK 是这块屏"为什么不亮"的第一嫌疑：**它悬空，而悬空等于
 是接线正确的证据）；网页"手动刷屏"按钮换色后仍然正确，说明 DC/CS 没接反。
 三色条花乱或整体偏移 → 引脚表错了；全黑但背光亮 → 数据没进去；全白 → 忘开反色
 （本驱动固定 `esp_lcd_panel_invert_color(true)`，IPS 屏不开就是负片）。
+
+## 屏上要显示表情 / 图片：用现成的，别自己写解码器
+
+2026-10-11 查过组件注册表和仓库，名字和依赖树都是**实测存在**的（不是凭印象）：
+
+| 组件 | 版本 | 许可 | 干什么 |
+| --- | --- | --- | --- |
+| `espressif2022/esp_emote_expression` | 1.0.x（registry 里还有 0.0.1） | Apache-2.0 | 表情/动画管理器：`emote_init()`、`emote_set_anim_emoji()`、事件回调 `EMOTE_MGR_EVT_SPEAK/_BAT` |
+| `espressif2022/esp_emote_gfx` | 1.1.1（下载量 11k+） | Apache-2.0 | 自带轻量渲染层，**不依赖 LVGL**；依赖 `esp_new_jpeg` + `freetype`，所以能吃 JPEG 和字体 |
+| `espressif2022/esp_emote_assets` | 0.0.2~3 | Apache-2.0 | SPIFFS 资源包生成/管理，依赖 `78/xiaozhi-fonts` —— **就是小智那套资源系统** |
+| `espressif/esp_mmap_assets` | 1.* | Apache-2.0 | 把资源文件按名字 mmap 进地址空间，上面那位用它 |
+
+要点：
+
+- 要求 **IDF ≥ 5.0**，我们的 5.3.5 满足（小智固件本身要 6.x 是另一回事，见任务 #8）。
+- 屏幕不用 LVGL 接管：它只要一个 `flush_cb(int x_start,int y_start,int x_end,int y_end,const void *data,emote_handle_t)`，
+  正好由 `display_tft` 现有的 `esp_lcd_panel_draw_bitmap()` 提供，`buff_spiram` 可选（我们有 8 MiB Octal PSRAM）。
+- 资源 `.bin` 由在线工具 **`https://gfx-gen-tool.pages.dev/`** 出，或用 **`78/xiaozhi-assets-generator`** 打包；
+  烧录走**具名分区**（例子里叫 `anim_icon`），不用手算偏移 —— 我们的 `partitions.csv` 需要加一行。
+- 参考分辨率给的是 360×360 / 320×240 / 1024×600，**没有 240×240**，这是唯一没验的风险点，
+  接之前先拿它的 example 对着我们这块屏跑一遍再决定。
+- 通用 GUI（不止表情）的另一条路是 `lvgl` + `espressif/esp_lvgl_port`（小智的 LCD 板型用它）。
+  表情动画选 emote 那条，因为**和小智同源**，今天做的资源包以后直接复用，不是白干。
 
 ## 当前主线：小智（xiaozhi-esp32）语音助手
 
