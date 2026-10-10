@@ -186,7 +186,8 @@ static esp_err_t led_handler(httpd_req_t *req)
     return send_ok(req, true, NULL);
 }
 
-/* POST /api/screen {"r":255,"g":0,"b":0} -- repaint the whole TFT one colour. */
+/* POST /api/screen {"r":255,"g":0,"b":0} repaints the whole TFT one colour;
+ * {"pattern":"bars"} repaints the red/green/blue wiring-proof bars. */
 static esp_err_t screen_handler(httpd_req_t *req)
 {
     cJSON *body = read_json_body(req);
@@ -197,10 +198,21 @@ static esp_err_t screen_handler(httpd_req_t *req)
     long r = json_int(body, "r", 0, 0, 255);
     long g = json_int(body, "g", 0, 0, 255);
     long b = json_int(body, "b", 0, 0, 255);
+    cJSON *pattern = cJSON_GetObjectItemCaseSensitive(body, "pattern");
+    bool bars = cJSON_IsString(pattern) && strcmp(pattern->valuestring, "bars") == 0;
     cJSON_Delete(body);
 
-    bool ok = display_tft_fill((uint8_t)r, (uint8_t)g, (uint8_t)b);
-    ESP_LOGI(TAG, "screen <- rgb(%ld,%ld,%ld) %s", r, g, b, ok ? "painted" : "no panel");
+    bool ok;
+    if (bars) {
+        ok = display_tft_ready();
+        if (ok) {
+            display_tft_bars();
+        }
+    } else {
+        ok = display_tft_fill((uint8_t)r, (uint8_t)g, (uint8_t)b);
+    }
+
+    ESP_LOGI(TAG, "screen <- %s %s", bars ? "bars" : "rgb fill", ok ? "painted" : "no panel");
     return send_ok(req, ok, ok ? NULL : "panel not initialised");
 }
 

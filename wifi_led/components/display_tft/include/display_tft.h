@@ -13,3 +13,6 @@ int display_tft_height(void);
 
 /* Fill the whole panel with one colour; false when the panel is not up. */
 bool display_tft_fill(uint8_t r, uint8_t g, uint8_t b);
+
+/* Paint the red/green/blue vertical bars the boot sequence uses as wiring proof. */
+void display_tft_bars(void);

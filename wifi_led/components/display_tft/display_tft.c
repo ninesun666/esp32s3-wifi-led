@@ -69,6 +69,28 @@ bool display_tft_fill(uint8_t r, uint8_t g, uint8_t b)
     return true;
 }
 
+/* Three vertical bars: if the wiring is right they are red/green/blue in that
+ * order left to right, and a shifted or garbled pattern means the pin map is
+ * wrong. Repaintable on purpose -- it is the test you can run from the browser
+ * instead of pressing the board's reset button. */
+void display_tft_bars(void)
+{
+    if (!display_tft_ready()) {
+        return;
+    }
+
+    for (int y = 0; y < s_height; y += STRIP_ROWS) {
+        int rows = s_height - y < STRIP_ROWS ? s_height - y : STRIP_ROWS;
+        for (int i = 0; i < s_width * rows; i++) {
+            int x = i % s_width;
+            s_strip[i] = x < s_width / 3 ? rgb565(255, 0, 0)
+                                         : (x < 2 * s_width / 3 ? rgb565(0, 255, 0)
+                                                                : rgb565(0, 0, 255));
+        }
+        esp_lcd_panel_draw_bitmap(s_panel, 0, y, s_width, y + rows, s_strip);
+    }
+}
+
 static void backlight_on(void)
 {
     /* The module's BLK floats and floats mean "off", so it has to be driven. */
@@ -151,19 +173,6 @@ void display_tft_start(void)
              CONFIG_WIFI_LED_TFT_DC_GPIO, CONFIG_WIFI_LED_TFT_CS_GPIO,
              CONFIG_WIFI_LED_TFT_RST_GPIO, CONFIG_WIFI_LED_TFT_SPI_HZ / 1000);
 
-    /* Three vertical bars: if the wiring is right they are red/green/blue in that
-     * order left to right; a garbled or shifted pattern means the pin map is wrong. */
-    uint16_t px;
-    for (int y = 0; y < s_height; y += STRIP_ROWS) {
-        int rows = s_height - y < STRIP_ROWS ? s_height - y : STRIP_ROWS;
-        for (int i = 0; i < s_width * rows; i++) {
-            int x = i % s_width;
-            px = x < s_width / 3 ? rgb565(255, 0, 0)
-                                 : (x < 2 * s_width / 3 ? rgb565(0, 255, 0)
-                                                        : rgb565(0, 0, 255));
-            s_strip[i] = px;
-        }
-        esp_lcd_panel_draw_bitmap(s_panel, 0, y, s_width, y + rows, s_strip);
-    }
+    display_tft_bars();
 #endif
 }

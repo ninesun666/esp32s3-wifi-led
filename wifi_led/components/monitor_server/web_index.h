@@ -67,6 +67,7 @@ h1{font-size:17px;margin:0 0 14px;font-weight:600}
 <button onclick="setScreen(40,200,40)">绿</button>
 <button onclick="setScreen(40,90,240)">蓝</button>
 <button onclick="setScreen(230,180,40)">黄</button>
+<button onclick="paintScreen({pattern:'bars'})">红绿蓝三色条</button>
 </div>
 <div id="scrmsg" style="color:#8b949e;font-size:12px;margin-top:6px"></div>
 </div>
@@ -84,14 +85,15 @@ async function setLed(r,g,b,hold){
   $('ledmsg').textContent=ok;
  }catch(e){$('ledmsg').textContent='发送失败：'+e}
 }
-async function setScreen(r,g,b){
+async function paintScreen(body){
  try{
   var res=await fetch('/api/screen',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({r:r,g:g,b:b})});
+    body:JSON.stringify(body)});
   var d=await res.json().catch(function(){return {}});
-  $('scrmsg').textContent=(res.ok&&d.ok)?('已刷屏 rgb('+r+','+g+','+b+')'):('失败 HTTP '+res.status+' '+(d.error||''));
+  $('scrmsg').textContent=(res.ok&&d.ok)?('已刷屏 '+JSON.stringify(body)):('失败 HTTP '+res.status+' '+(d.error||''));
  }catch(e){$('scrmsg').textContent='发送失败：'+e}
 }
+function setScreen(r,g,b){paintScreen({r:r,g:g,b:b})}
 async function tick(){
  try{
   var r=await fetch('/api/status',{cache:'no-store'});var d=await r.json();
