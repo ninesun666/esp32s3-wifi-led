@@ -228,10 +228,15 @@ python board_api.py screen 255 0 0        # 整屏纯色
 python board_api.py screen emote happy    # 刷表情
 python board_api.py led 230 160 20 6000
 python emote_stress.py 60                 # 混打回归：三色条和表情交替，全程探活
+python check_page_js.py                   # 编译进固件的页面 JS 语法检查，不用烧录就能发现
 ```
 
 别用"读到连接关闭为止"的写法（`curl` 不带 `-m`、python 裸 recv 到 EOF 都算），
 `esp_http_server` 不会替你先关连接 —— 那正是历史上那条"只有刚开机能通"的假结论的来源。
+
+同理，**页面里的 JS 语法错误对 HTTP 探测完全隐形**：`<script>` 整体作废，所有 API 照样返回 200，
+现象是网页永远停在"连接中"。`check_page_js.py` 把 `web_index.h` 里那段脚本抽出来丢给 `node --check`，
+所以改过页面先跑它，再谈烧录。
 
 非 Windows 或非 Git Bash 环境直接用原生 `idf.py set-target esp32s3 / build / flash` 就行。
 

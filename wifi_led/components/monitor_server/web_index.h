@@ -102,7 +102,7 @@ async function setLed(r,g,b,hold){
  try{
   var res=await fetch('/api/led',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({r:r,g:g,b:b,hold_ms:hold})});
-  var ok=res.ok&&(hold>0?('已发送 rgb('+r+','+g+','+b+')，保持 '+(hold/1000)+' 秒'):'已交还状态机'):('失败 HTTP '+res.status);
+  var ok=res.ok?(hold>0?('已发送 rgb('+r+','+g+','+b+')，保持 '+(hold/1000)+' 秒'):'已交还状态机'):('失败 HTTP '+res.status);
   $('ledmsg').textContent=ok;
  }catch(e){$('ledmsg').textContent='发送失败：'+e}
 }

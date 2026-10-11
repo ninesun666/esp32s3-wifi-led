@@ -12,6 +12,7 @@
 | `capture_boot.py` | 复位板子并抓开机日志（这块板的复位配方写在文件头注释里） |
 | `emote_stress.py` | 刷屏 API 交替压测 —— 三色条/纯色/表情混打，兼作死锁回归 |
 | `emote_soak.py` | 复位后让表情连续跑 N 秒，同时盯串口有没有报错 |
+| `check_page_js.py` | 把编译进固件的页面 JS 抽出来 `node --check`（JS 语法错误不会让任何 API 报错） |
 
 ## 硬件事实
 
