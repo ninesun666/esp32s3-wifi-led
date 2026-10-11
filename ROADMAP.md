@@ -106,6 +106,32 @@
 - `CONFIG_MMAP_FILE_NAME_LENGTH=32` 必须与打包参数 `--name_length 32` 一致，否则挂载时按名字取不到文件。
 - 这套资源和小智同源，以后 P4 做带屏板型时能直接复用，不是白干。
 
+## 电池供电：方案已定，**线还没接**（2026-10-11）
+
+接线图：[`docs/battery_wiring.svg`](docs/battery_wiring.svg)（同名 `.png` 是渲染结果）。
+
+- 电池：**FL 104050 锂聚合物 3.7 V / 2550 mAh / 9.435 Wh**，裸线无接头（先压 JST PH2.0 + 加开关，
+  别把线直接焊在模块焊盘上）。左边缘贴着一小条 PCB，疑似自带保护板，**尚未确认**。
+- 链路：电池 → SW1 → TP4056（带 DW01A 那版，`R_SET` 出厂 1.2 kΩ＝1 A＝0.39C，**不用换电阻**）
+  → 升压 SX1308/MT3608 **先空载调到 5.00 V** → 板子 `5V(VIN)`。全链共地。
+- 电量采样：1:2 分压（100 kΩ / 100 kΩ，只漏 20 µA）→ **GPIO 2**。必须落在 **ADC1 = GPIO 1-10**，
+  因为 ADC2 与 Wi-Fi 共用、无线电开着读不出数，而这块板永远连着 Wi-Fi。
+  `CHRG → GPIO 39`、`STDBY → GPIO 40`（都是开漏低有效，用 MCU 内部上拉）。
+  **没选 10/11/13** 是故意的：那四个脚（10-13）以后要把 SPI 挪到 IO_MUX 跑 40 MHz。
+- 续航预算（当前固件平均 ~0.5 W）：升压 + 板载 LDO（η≈0.59）**≈11 h**；改降压 3.3 V（η≈0.88）**≈17 h**；
+  再叠 modem-sleep + 背光 PWM 调暗（~0.1 W）**≈2.5 天**。省电那条是最大头，值得做。
+- 阈值：3.3 V 报警、3.1 V 落盘关机，且**必须"连续 N 次低于阈值"才动作** —— Wi-Fi TX 突发时端电压
+  会瞬时塌 200-300 mV，单次判据会把好电池误判成没电。
+- 抄谁（都已读源码核实，别再自己写 OCV 表）：
+  - `espressif/adc_battery_estimation` v0.3.0（在 esp-iot-solution 的 `components/sensors/battery_fuel_gauge/`，
+    同目录还有 `max17048`、`bq27220` 两个 I2C 电量计驱动）：OCV-SOC 查表 + 滤波 + CHRG/STDBY 回调，
+    **STDBY 优先于 CHRG，置位即锁 100% 且不再采样**（否则会出现"插着电电量慢慢往下掉"）。
+  - 用法样板：xiaozhi-esp32 `main/boards/common/adc_battery_monitor.cc`。
+  - 门控分压（拉高 → `delay(10)` → 读 → 拉低）和连续 N 次低电计数：Meshtastic `src/Power.cpp` / `src/Power.h`
+    （`LOW_VOLTAGE_READINGS_BEFORE_SHUTDOWN = 10`，LiIon OCV 表 4190…3100 mV）。
+- **风险**：TP4056 的 USB-C 和升压输出会同时顶 5 V 网络。插电脑烧固件前**先断开 SW1**，
+  否则往电脑 USB 口倒灌。
+
 ## 当前主线：小智（xiaozhi-esp32）语音助手
 
 选型理由：固件是成熟基座（171 个板型），服务端全开源，浏览器端能先跑起来验证整条链路，

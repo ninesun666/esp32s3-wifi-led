@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 780" font-family="Microsoft YaHei, sans-serif">
+  <rect width="1240" height="780" fill="#ffffff"/>
+  <text x="40" y="40" font-size="24" font-weight="bold">3.7 V 锂聚合物 → ESP32-S3 供电 / 充电 / 电量采样</text>
+  <text x="40" y="66" font-size="15" fill="#555">红=电池正极　橙=5V　黑=地　蓝=信号　绿虚线=电压采样。走线交叉处没有圆点即不相连。</text>
+
+  <!-- ============ 电池电压采样 ============ -->
+  <rect x="620" y="105" width="330" height="155" rx="8" fill="none" stroke="#3a9b3a" stroke-width="2" stroke-dasharray="6 4"/>
+  <text x="785" y="128" font-size="14" font-weight="bold" text-anchor="middle" fill="#275">电池电压采样（1:2 分压）</text>
+  <text x="244" y="152" font-size="12" fill="#275">取自电芯（在开关之前）</text>
+  <rect x="706" y="152" width="70" height="26" rx="4" fill="#eafaef" stroke="#3a9b3a"/>
+  <text x="741" y="170" font-size="12" text-anchor="middle">R1 100k</text>
+  <line x1="776" y1="165" x2="806" y2="165" stroke="#3a9b3a" stroke-width="2"/>
+  <circle cx="806" cy="165" r="4" fill="#111"/>
+  <text x="816" y="152" font-size="13" fill="#275">中点 → GPIO 2</text>
+  <line x1="806" y1="169" x2="806" y2="192" stroke="#3a9b3a" stroke-width="2"/>
+  <rect x="771" y="192" width="70" height="26" rx="4" fill="#eafaef" stroke="#3a9b3a"/>
+  <text x="806" y="210" font-size="12" text-anchor="middle">R2 100k</text>
+  <line x1="806" y1="218" x2="806" y2="236" stroke="#3a9b3a" stroke-width="2"/>
+  <text x="814" y="238" font-size="13">GND</text>
+  <text x="636" y="250" font-size="12" fill="#a33">只能落在 GPIO 1-10（ADC1）</text>
+  <polyline points="220,330 236,330 236,165 706,165" fill="none" stroke="#3a9b3a" stroke-width="2" stroke-dasharray="5 4"/>
+
+  <!-- ============ 电池 ============ -->
+  <rect x="40" y="300" width="180" height="140" rx="8" fill="#fff8e1" stroke="#c9a227" stroke-width="2"/>
+  <text x="130" y="330" font-size="16" font-weight="bold" text-anchor="middle">锂聚合物</text>
+  <text x="130" y="352" font-size="14" text-anchor="middle">3.7 V / 2550 mAh</text>
+  <text x="130" y="372" font-size="14" text-anchor="middle">FL 104050</text>
+  <text x="130" y="398" font-size="13" fill="#a33" text-anchor="middle">裸线无接头</text>
+  <text x="130" y="418" font-size="13" fill="#666" text-anchor="middle">线头先各自包胶带</text>
+  <circle cx="220" cy="330" r="4" fill="#d00"/>
+  <circle cx="220" cy="410" r="4" fill="#111"/>
+
+  <!-- ============ 开关 ============ -->
+  <rect x="252" y="312" width="96" height="36" rx="6" fill="#eef" stroke="#44c"/>
+  <text x="300" y="335" font-size="14" text-anchor="middle">SW1 开关</text>
+  <line x1="220" y1="330" x2="252" y2="330" stroke="#d00" stroke-width="3"/>
+  <line x1="348" y1="330" x2="412" y2="330" stroke="#d00" stroke-width="3"/>
+  <text x="300" y="300" font-size="12" fill="#446" text-anchor="middle">断开＝整链断电</text>
+
+  <!-- ============ TP4056 ============ -->
+  <rect x="400" y="250" width="220" height="250" rx="8" fill="#e9f6ff" stroke="#2b7fbf" stroke-width="2"/>
+  <text x="510" y="280" font-size="16" font-weight="bold" text-anchor="middle">TP4056 模块</text>
+  <text x="510" y="300" font-size="13" text-anchor="middle" fill="#266">选带 DW01A 保护那版</text>
+  <text x="510" y="318" font-size="13" text-anchor="middle" fill="#266">R_SET 出厂 1.2k＝1 A（0.39C）</text>
+  <circle cx="412" cy="330" r="4" fill="#d00"/><text x="422" y="335" font-size="13">B+</text>
+  <circle cx="412" cy="372" r="4" fill="#111"/><text x="422" y="377" font-size="13">B-</text>
+  <circle cx="608" cy="330" r="4" fill="#d00"/><text x="598" y="335" font-size="13" text-anchor="end">OUT+</text>
+  <circle cx="608" cy="372" r="4" fill="#111"/><text x="598" y="377" font-size="13" text-anchor="end">OUT-（＝B-）</text>
+  <text x="510" y="440" font-size="12" fill="#266" text-anchor="middle">OUT 就是电池节点，不是稳压输出</text>
+  <circle cx="440" cy="470" r="4" fill="#26c"/><text x="440" y="492" font-size="13" text-anchor="middle">CHRG</text>
+  <circle cx="512" cy="470" r="4" fill="#26c"/><text x="512" y="492" font-size="13" text-anchor="middle">STDBY</text>
+  <text x="580" y="492" font-size="13" text-anchor="middle">USB-C 充电</text>
+  <line x1="220" y1="410" x2="380" y2="410" stroke="#111" stroke-width="3"/>
+  <line x1="380" y1="410" x2="380" y2="372" stroke="#111" stroke-width="3"/>
+  <line x1="380" y1="372" x2="412" y2="372" stroke="#111" stroke-width="3"/>
+
+  <!-- ============ 升压 ============ -->
+  <line x1="608" y1="330" x2="700" y2="330" stroke="#d00" stroke-width="3"/>
+  <rect x="700" y="290" width="180" height="130" rx="8" fill="#f0ffe9" stroke="#3a9b3a" stroke-width="2"/>
+  <text x="790" y="318" font-size="16" font-weight="bold" text-anchor="middle">升压 3.7→5 V</text>
+  <text x="790" y="338" font-size="13" text-anchor="middle" fill="#275">SX1308 / MT3608</text>
+  <circle cx="712" cy="362" r="4" fill="#d00"/><text x="722" y="367" font-size="13">VIN</text>
+  <circle cx="868" cy="362" r="4" fill="#e80"/><text x="858" y="367" font-size="13" text-anchor="end">VOUT</text>
+  <circle cx="790" cy="420" r="4" fill="#111"/><text x="800" y="424" font-size="13">GND</text>
+  <line x1="608" y1="330" x2="690" y2="330" stroke="#d00" stroke-width="3"/>
+  <line x1="690" y1="330" x2="690" y2="362" stroke="#d00" stroke-width="3"/>
+  <line x1="690" y1="362" x2="712" y2="362" stroke="#d00" stroke-width="3"/>
+  <text x="790" y="272" font-size="12" fill="#a33" text-anchor="middle">先空载调到 5.00 V，再接板子</text>
+
+  <!-- ============ 板子 ============ -->
+  <line x1="868" y1="362" x2="920" y2="362" stroke="#e80" stroke-width="3"/>
+  <rect x="960" y="200" width="250" height="330" rx="8" fill="#f3f0ff" stroke="#6b4bbf" stroke-width="2"/>
+  <text x="1085" y="230" font-size="16" font-weight="bold" text-anchor="middle">ESP32-S3 板（现在这块）</text>
+  <text x="1085" y="250" font-size="12" fill="#547" text-anchor="middle">屏占 4-9，WS2812 占 48</text>
+  <circle cx="975" cy="300" r="4" fill="#e80"/><text x="988" y="305" font-size="13">5V (VIN)</text>
+  <circle cx="975" cy="395" r="4" fill="#3a9b3a"/><text x="988" y="400" font-size="13">GPIO 2 电池电压</text>
+  <circle cx="975" cy="435" r="4" fill="#26c"/><text x="988" y="440" font-size="13">GPIO 39 CHRG</text>
+  <circle cx="975" cy="475" r="4" fill="#26c"/><text x="988" y="480" font-size="13">GPIO 40 STDBY</text>
+  <text x="1085" y="518" font-size="12" fill="#547" text-anchor="middle">USB-C 照常插（烧固件）</text>
+  <circle cx="1090" cy="530" r="4" fill="#111"/>
+  <line x1="920" y1="362" x2="920" y2="300" stroke="#e80" stroke-width="3"/>
+  <line x1="920" y1="300" x2="975" y2="300" stroke="#e80" stroke-width="3"/>
+  <polyline points="806,165 940,165 940,395 975,395" fill="none" stroke="#3a9b3a" stroke-width="2" stroke-dasharray="5 4"/>
+  <line x1="440" y1="470" x2="440" y2="560" stroke="#26c" stroke-width="2"/>
+  <line x1="440" y1="560" x2="930" y2="560" stroke="#26c" stroke-width="2"/>
+  <line x1="930" y1="560" x2="930" y2="435" stroke="#26c" stroke-width="2"/>
+  <line x1="930" y1="435" x2="975" y2="435" stroke="#26c" stroke-width="2"/>
+  <line x1="512" y1="470" x2="512" y2="600" stroke="#26c" stroke-width="2"/>
+  <line x1="512" y1="600" x2="952" y2="600" stroke="#26c" stroke-width="2"/>
+  <line x1="952" y1="600" x2="952" y2="475" stroke="#26c" stroke-width="2"/>
+  <line x1="952" y1="475" x2="975" y2="475" stroke="#26c" stroke-width="2"/>
+  <text x="640" y="552" font-size="12" fill="#26a">CHRG 开漏低有效，用 MCU 内部上拉</text>
+  <text x="640" y="592" font-size="12" fill="#26a">STDBY 充满变高；未接电池也会变高</text>
+
+  <!-- ============ 地线汇流 ============ -->
+  <line x1="380" y1="410" x2="380" y2="700" stroke="#111" stroke-width="3"/>
+  <line x1="790" y1="420" x2="790" y2="700" stroke="#111" stroke-width="3"/>
+  <line x1="1090" y1="530" x2="1090" y2="700" stroke="#111" stroke-width="3"/>
+  <line x1="380" y1="700" x2="1090" y2="700" stroke="#111" stroke-width="5"/>
+  <text x="400" y="726" font-size="13" fill="#333">共地：电池- / TP4056 B- 与 OUT- / 升压 GND / 板子 GND 必须连成一条</text>
+
+  <!-- ============ 注意 ============ -->
+  <rect x="40" y="480" width="300" height="190" rx="8" fill="#fff0f0" stroke="#c44" stroke-width="2"/>
+  <text x="58" y="508" font-size="15" font-weight="bold" fill="#a22">动手前四条</text>
+  <text x="58" y="536" font-size="13">1. 插电脑烧固件前先断开 SW1</text>
+  <text x="72" y="554" font-size="12" fill="#666">（升压和 USB 会同时顶 5V）</text>
+  <text x="58" y="582" font-size="13">2. 升压先空载调压再接线</text>
+  <text x="58" y="608" font-size="13">3. 红黑线头分别包绝缘</text>
+  <text x="58" y="634" font-size="13">4. 别接 3V3 排针</text>
+  <text x="72" y="652" font-size="12" fill="#666">那是 LDO 的输出，会倒灌</text>
+</svg>
