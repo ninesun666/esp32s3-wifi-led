@@ -1,18 +1,19 @@
-menu "Wi-Fi LED example"
+menu "Wi-Fi LED monitor"
 
-    config EXAMPLE_WIFI_SSID
+    config WIFI_LED_WIFI_SSID
         string "Router SSID"
         default "CHANGE_ME"
         help
-            Name of the 2.4GHz access point to join.
+            Name of the 2.4GHz access point to join. Put the real value in
+            sdkconfig.local, which is gitignored.
 
-    config EXAMPLE_WIFI_PASSWORD
+    config WIFI_LED_WIFI_PASSWORD
         string "Router password"
         default "CHANGE_ME"
         help
             WPA2/WPA3 passphrase. Empty string for an open network.
 
-    config EXAMPLE_RGB_LED_GPIO
+    config WIFI_LED_RGB_GPIO
         int "WS2812 RGB LED GPIO"
         range 0 48
         default 48
@@ -20,19 +21,129 @@ menu "Wi-Fi LED example"
             Data pin of the onboard WS2812. ESP32-S3-DevKitC-1 uses GPIO 48.
             Avoid 19/20 (native USB), 43/44 (UART), 26-32 (Octal PSRAM).
 
-    config EXAMPLE_RGB_LED_COUNT
+    config WIFI_LED_RGB_COUNT
         int "Number of WS2812 LEDs"
         range 1 8
         default 1
 
-    config EXAMPLE_MONO_LED_GPIO
+    config WIFI_LED_MONO_GPIO
         int "Plain single-color LED GPIO, -1 to disable"
         range -1 48
         default -1
         help
             Optional second indicator wired as a plain GPIO LED.
 
-    config EXAMPLE_AP_ENABLE
+    config WIFI_LED_HTTP_PORT
+        int "HTTP monitor port"
+        range 1 65535
+        default 80
+
+    config WIFI_LED_MDNS_HOSTNAME
+        string "mDNS hostname"
+        default "esp32-monitor"
+        help
+            The board answers for http://<hostname>.local on the LAN, so the
+            page is reachable without tracking the DHCP address. Some Windows
+            resolvers do not implement mDNS; fall back to the printed IP.
+
+    config WIFI_LED_I2C_PROBE_ENABLE
+        bool "Scan the I2C bus at boot"
+        default n
+        help
+            Useful when an I2C module is attached to the two pins below. Off by
+            default now that GPIO 8/9 are wired to the SPI TFT -- the scan would
+            claim those pins and, on a floating bus, report phantom addresses.
+
+    config WIFI_LED_I2C_SDA_GPIO
+        int "External I2C module SDA GPIO"
+        range 0 48
+        default 8
+        help
+            Data line of the I2C bus the OLED/display module goes on.
+            Free choices on this board: 0-21 and 38-48 minus 19/20 (native USB),
+            43/44 (UART console), 48 (onboard WS2812) and 26-37 (Octal PSRAM).
+
+    config WIFI_LED_I2C_SCL_GPIO
+        int "External I2C module SCL GPIO"
+        range 0 48
+        default 9
+
+    comment "1.54in 240x240 IPS TFT (ST7789, 4-wire SPI)"
+
+    config WIFI_LED_TFT_ENABLE
+        bool "Drive the TFT panel"
+        default y
+        help
+            Uses SPI2. Boot paints red/green/blue bars, and POST /api/screen can
+            repaint it solid from the browser.
+
+    config WIFI_LED_TFT_WIDTH
+        int "Panel width"
+        range 80 320
+        default 240
+
+    config WIFI_LED_TFT_HEIGHT
+        int "Panel height"
+        range 80 480
+        default 240
+
+    config WIFI_LED_TFT_SCLK_GPIO
+        int "SCLK (module pin SCL) GPIO"
+        range 0 48
+        default 9
+
+    config WIFI_LED_TFT_MOSI_GPIO
+        int "MOSI (module pin SDA) GPIO"
+        range 0 48
+        default 8
+
+    config WIFI_LED_TFT_DC_GPIO
+        int "DC (data/command) GPIO"
+        range 0 48
+        default 5
+
+    config WIFI_LED_TFT_CS_GPIO
+        int "CS GPIO"
+        range 0 48
+        default 6
+
+    config WIFI_LED_TFT_RST_GPIO
+        int "RES (reset) GPIO, -1 to tie externally"
+        range -1 48
+        default 4
+
+    config WIFI_LED_TFT_BLK_GPIO
+        int "BLK (backlight) GPIO, -1 if wired to 3V3"
+        range -1 48
+        default 7
+        help
+            The module's BLK floats and floating means the backlight is OFF, so
+            either drive this pin high or strap BLK straight to 3V3.
+
+    config WIFI_LED_TFT_SPI_HZ
+        int "SPI clock"
+        range 1000000 80000000
+        default 20000000
+        help
+            20 MHz is the safe number for pins routed through the GPIO matrix.
+            SCLK=12 / MOSI=11 / CS=10 are the SPI2 IO_MUX pins and can take 40 MHz.
+
+    config WIFI_LED_TFT_EMOTE_ENABLE
+        bool "Render emoji through esp_emote_expression"
+        depends on WIFI_LED_TFT_ENABLE
+        default y
+        help
+            Brings in the esp_emote graphics stack (LVGL, freetype, jpeg) and loads the
+            asset pack from the anim_icon data partition, which main/CMakeLists.txt
+            generates from assets/240_240 at build time. Boot then paints the RGB bars
+            first and hands the panel to the face renderer.
+
+    config WIFI_LED_TFT_EMOTE_PARTITION
+        string "Emote asset partition label"
+        depends on WIFI_LED_TFT_EMOTE_ENABLE
+        default "anim_icon"
+
+    config WIFI_LED_AP_ENABLE
         bool "Run a fallback SoftAP on the board"
         default n
         help
@@ -43,14 +154,14 @@ menu "Wi-Fi LED example"
             board whose LAN address is unreachable; otherwise open the page at
             the router-assigned STA address logged as "got IP: ...".
 
-    config EXAMPLE_AP_SSID
+    config WIFI_LED_AP_SSID
         string "SoftAP SSID"
-        depends on EXAMPLE_AP_ENABLE
+        depends on WIFI_LED_AP_ENABLE
         default "ESP32-MONITOR"
 
-    config EXAMPLE_AP_PASSWORD
+    config WIFI_LED_AP_PASSWORD
         string "SoftAP password, at least 8 characters"
-        depends on EXAMPLE_AP_ENABLE
+        depends on WIFI_LED_AP_ENABLE
         default "esp32test"
 
     config EXAMPLE_BLE_ENABLE

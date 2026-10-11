@@ -1,8 +1,8 @@
-# Copy to sdkconfig.local and fill in your own router credentials.
-# sdkconfig.local is gitignored; this template is not.
+# Copy to sdkconfig.local and fill in. sdkconfig.local is gitignored; this
+# template is what you commit.
 #
-#   cp sdkconfig.local.example sdkconfig.local
-#   rm sdkconfig          # force sdkconfig.defaults(+local) to be re-read
-#   idf.py build
-CONFIG_EXAMPLE_WIFI_SSID="your-ssid"
-CONFIG_EXAMPLE_WIFI_PASSWORD="your-password"
+# The router password is visible on the gateway's own page:
+# 网络 -> WLAN -> WLAN安全 -> WPA 密钥. Read it there instead of guessing: a wrong
+# key against this ZTE/China Unicom gateway shows up as reason 204, not reason 15.
+CONFIG_WIFI_LED_WIFI_SSID="CHANGE_ME"
+CONFIG_WIFI_LED_WIFI_PASSWORD="CHANGE_ME"

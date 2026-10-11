@@ -14,14 +14,16 @@ CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_IGNORE_NOTFOUND=y
 
-# --- Larger app partition, ready for real projects ---
+# --- OTA-ready layout (otadata + two app slots) ---
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
-# --- LED pins (see main/Kconfig.projbuild) ---
-CONFIG_EXAMPLE_RGB_LED_GPIO=48
-CONFIG_EXAMPLE_RGB_LED_COUNT=1
-CONFIG_EXAMPLE_MONO_LED_GPIO=-1
+# --- Board pins and endpoints (see main/Kconfig.projbuild) ---
+CONFIG_WIFI_LED_RGB_GPIO=48
+CONFIG_WIFI_LED_RGB_COUNT=1
+CONFIG_WIFI_LED_MONO_GPIO=-1
+CONFIG_WIFI_LED_HTTP_PORT=80
+CONFIG_WIFI_LED_MDNS_HOSTNAME="esp32-monitor"
 
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
@@ -58,3 +60,13 @@ CONFIG_BT_NIMBLE_SPS_SERVICE=n
 CONFIG_BT_NIMBLE_HR_SERVICE=n
 CONFIG_BT_NIMBLE_BAS_SERVICE=n
 CONFIG_BT_NIMBLE_DIS_SERVICE=n
+
+# --- esp_emote asset pack (CONFIG_WIFI_LED_TFT_EMOTE_ENABLE) ---
+# The asset index is built with 32-character names; if the runtime is compiled with
+# a different MMAP_FILE_NAME_LENGTH the pack loads with truncated/missing entries.
+CONFIG_MMAP_FILE_NAME_LENGTH=32
+# The 20px PuHuiCJK face font has far more than 8192 glyphs, which LVGL only
+# allows with the large text-format turned on.
+CONFIG_LV_FONT_FMT_TXT_LARGE=y
+# display_tft_start() mounts and parses a 2.4 MB asset pack on the main task.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
