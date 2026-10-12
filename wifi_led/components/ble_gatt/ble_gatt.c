@@ -1,9 +1,11 @@
 /*
- * BLE GATT server: one custom service exposing the strip takeover setting and
- * the device status JSON, so a phone running nRF Connect can drive the board
- * without the web page. The LED characteristic shares status_light's control
- * state with POST /api/led; the status characteristic shares monitor_server's
- * /api/status object (client list dropped so one ATT read carries it).
+ * BLE GATT server: one custom service exposing the strip takeover setting, the
+ * device status JSON, the screen/emote command, the OTA transfer (control on
+ * 0005 + raw image chunks on 0006) and the HID dispatcher (0007), so a phone
+ * can drive the board without the web page. The LED characteristic shares
+ * status_light's control state with POST /api/led; the status characteristic
+ * shares monitor_server's /api/status object (client list dropped so one ATT
+ * read carries it); the screen characteristic reuses /api/screen's apply logic.
  *
  * Everything below compiles away when CONFIG_EXAMPLE_BLE_ENABLE is off (the
  * NimBLE headers do not exist with Bluetooth disabled).
@@ -16,9 +18,13 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdio.h>
 #include "esp_log.h"
+#include "cJSON.h"
 #include "status_light.h"
 #include "monitor_server.h"
+#include "ota_update.h"
+#include "usb_hid.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
@@ -31,8 +37,9 @@
 static const char *TAG = "ble_gatt";
 
 /* One custom 128-bit service, 5d400001-7a9b-4c8e-b2f4-38a1c6e0d951, with a
- * LED characteristic (0002, same JSON as POST /api/led) and a read-only
- * status characteristic (0003, same fields as /api/status). UUID bytes are
+ * LED characteristic (0002, same JSON as POST /api/led), a read-only
+ * status characteristic (0003, same fields as /api/status) and a screen
+ * characteristic (0004, same JSON as POST /api/screen). UUID bytes are
  * listed LSB-first, as BLE_UUID128_INIT and the on-air format want. */
 static const ble_uuid128_t k_ble_svc_uuid =
     BLE_UUID128_INIT(0x51, 0xd9, 0xe0, 0xc6, 0xa1, 0x38, 0xf4, 0xb2,
@@ -43,8 +50,30 @@ static const ble_uuid128_t k_ble_led_uuid =
 static const ble_uuid128_t k_ble_status_uuid =
     BLE_UUID128_INIT(0x51, 0xd9, 0xe0, 0xc6, 0xa1, 0x38, 0xf4, 0xb2,
                      0x8e, 0x4c, 0x9b, 0x7a, 0x03, 0x00, 0x40, 0x5d);
+static const ble_uuid128_t k_ble_screen_uuid =
+    BLE_UUID128_INIT(0x51, 0xd9, 0xe0, 0xc6, 0xa1, 0x38, 0xf4, 0xb2,
+                     0x8e, 0x4c, 0x9b, 0x7a, 0x04, 0x00, 0x40, 0x5d);
+static const ble_uuid128_t k_ble_ota_ctl_uuid =
+    BLE_UUID128_INIT(0x51, 0xd9, 0xe0, 0xc6, 0xa1, 0x38, 0xf4, 0xb2,
+                     0x8e, 0x4c, 0x9b, 0x7a, 0x05, 0x00, 0x40, 0x5d);
+static const ble_uuid128_t k_ble_ota_data_uuid =
+    BLE_UUID128_INIT(0x51, 0xd9, 0xe0, 0xc6, 0xa1, 0x38, 0xf4, 0xb2,
+                     0x8e, 0x4c, 0x9b, 0x7a, 0x06, 0x00, 0x40, 0x5d);
+static const ble_uuid128_t k_ble_hid_uuid =
+    BLE_UUID128_INIT(0x51, 0xd9, 0xe0, 0xc6, 0xa1, 0x38, 0xf4, 0xb2,
+                     0x8e, 0x4c, 0x9b, 0x7a, 0x07, 0x00, 0x40, 0x5d);
 
 static uint8_t s_ble_addr_type;
+
+/* JSON number with clamped range, for fields like usage/modifier/size. */
+static long json_long(const cJSON *item)
+{
+    if (!cJSON_IsNumber(item)) {
+        return 0;
+    }
+    double v = item->valuedouble;
+    return v < 0 ? 0 : (v > 0x7fffffff ? 0x7fffffff : (long)v);
+}
 
 /* The public store header does not declare this; official examples forward-
  * declare it the same way. */
@@ -55,7 +84,8 @@ static int ble_gap_event_cb(struct ble_gap_event *event, void *arg);
 static int ble_gatt_access(uint16_t conn_handle, uint16_t attr_handle,
                            struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
-    /* arg names the characteristic: 2 = LED, 3 = status. */
+    /* arg names the characteristic: 2 = LED, 3 = status, 4 = screen,
+     * 5 = OTA control, 6 = OTA data, 7 = HID. */
     if ((uintptr_t)arg == 2) {
         if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
             char buf[256] = {0};
@@ -98,6 +128,160 @@ static int ble_gatt_access(uint16_t conn_handle, uint16_t attr_handle,
         return rc;
     }
 
+    if ((uintptr_t)arg == 4) {
+        if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
+            return BLE_ATT_ERR_WRITE_NOT_PERMITTED;
+        }
+        char buf[128] = {0};
+        uint16_t om_len = OS_MBUF_PKTLEN(ctxt->om);
+        if (om_len >= sizeof(buf)) {
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        int rc = ble_hs_mbuf_to_flat(ctxt->om, buf, sizeof(buf) - 1, NULL);
+        if (rc != 0) {
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+        cJSON *body = cJSON_Parse(buf);
+        if (!body) {
+            ESP_LOGW(TAG, "BLE screen write rejected: bad JSON");
+            return 0x81; /* application error: invalid screen JSON */
+        }
+        const char *what = "(none)";
+        const char *why = "panel not ready";
+        bool ok = monitor_server_screen_apply(body, &what, &why);
+        cJSON_Delete(body);
+        if (!ok) {
+            ESP_LOGW(TAG, "BLE screen write failed: %s %s", what, why);
+            return 0x81;
+        }
+        ESP_LOGI(TAG, "BLE screen <- %s", what);
+        return 0;
+    }
+
+    if ((uintptr_t)arg == 5) {
+        /* OTA control: JSON commands, raw image data flows through 0006. */
+        if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+            size_t written = 0, total = 0;
+            bool busy = false;
+            ota_update_progress(&written, &total, &busy);
+            char json[96];
+            snprintf(json, sizeof(json),
+                     "{\"busy\":%s,\"written\":%u,\"total\":%u}",
+                     busy ? "true" : "false", (unsigned)written, (unsigned)total);
+            return os_mbuf_append(ctxt->om, json, strlen(json));
+        }
+        if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
+            return BLE_ATT_ERR_WRITE_NOT_PERMITTED;
+        }
+        char buf[256] = {0};
+        if (OS_MBUF_PKTLEN(ctxt->om) >= sizeof(buf) ||
+            ble_hs_mbuf_to_flat(ctxt->om, buf, sizeof(buf) - 1, NULL) != 0) {
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        cJSON *body = cJSON_Parse(buf);
+        if (!body) {
+            return 0x81;
+        }
+        const char *cmd = cJSON_GetStringValue(cJSON_GetObjectItem(body, "cmd"));
+        esp_err_t err = ESP_OK;
+        if (cmd && strcmp(cmd, "begin") == 0) {
+            uint8_t sha[32];
+            bool has_sha = false;
+            const char *hex = cJSON_GetStringValue(cJSON_GetObjectItem(body, "sha256"));
+            if (hex && strlen(hex) == 64) {
+                has_sha = true;
+                for (int i = 0; i < 32; i++) {
+                    unsigned byte;
+                    sscanf(hex + 2 * i, "%2x", &byte);
+                    sha[i] = (uint8_t)byte;
+                }
+            }
+            long size = json_long(cJSON_GetObjectItem(body, "size"));
+            err = size > 0 ? ota_update_begin((size_t)size, has_sha, sha)
+                           : ESP_ERR_INVALID_ARG;
+        } else if (cmd && strcmp(cmd, "end") == 0) {
+            err = ota_update_finish();
+            if (err == ESP_OK) {
+                ota_update_reboot_later();
+            }
+        } else if (cmd && strcmp(cmd, "abort") == 0) {
+            err = ota_update_abort();
+        } else {
+            err = ESP_ERR_INVALID_ARG;
+        }
+        cJSON_Delete(body);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "BLE OTA ctl failed: %s", esp_err_to_name(err));
+            return 0x83; /* application error: operation failed */
+        }
+        return 0;
+    }
+
+    if ((uintptr_t)arg == 6) {
+        /* OTA data: raw firmware chunks, no JSON. A chunk landing while no
+         * transfer is active (or a flash write error) is a 0x83; the sender
+         * restarts the whole transfer. */
+        if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
+            return BLE_ATT_ERR_WRITE_NOT_PERMITTED;
+        }
+        uint8_t buf[512];
+        uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
+        if (len == 0 || len > sizeof(buf) ||
+            ble_hs_mbuf_to_flat(ctxt->om, buf, sizeof(buf), NULL) != 0) {
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        if (ota_update_write(buf, len) != ESP_OK) {
+            return 0x83;
+        }
+        return 0;
+    }
+
+    if ((uintptr_t)arg == 7) {
+        /* HID control: media keys / key presses / text typing. Always present,
+         * answers 0x82 when the usb_hid component is disabled so clients can
+         * tell "not compiled in" from "flash error". */
+        if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
+            return BLE_ATT_ERR_WRITE_NOT_PERMITTED;
+        }
+        char buf[192] = {0};
+        if (OS_MBUF_PKTLEN(ctxt->om) >= sizeof(buf) ||
+            ble_hs_mbuf_to_flat(ctxt->om, buf, sizeof(buf) - 1, NULL) != 0) {
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        if (!usb_hid_ready()) {
+            return 0x82; /* application error: HID not available */
+        }
+        cJSON *body = cJSON_Parse(buf);
+        if (!body) {
+            return 0x81;
+        }
+        const char *type = cJSON_GetStringValue(cJSON_GetObjectItem(body, "type"));
+        esp_err_t err = ESP_ERR_INVALID_ARG;
+        if (type && strcmp(type, "text") == 0) {
+            const char *text = cJSON_GetStringValue(cJSON_GetObjectItem(body, "text"));
+            if (text) {
+                err = usb_hid_text(text);
+            }
+        } else if (type && strcmp(type, "media") == 0) {
+            const char *key = cJSON_GetStringValue(cJSON_GetObjectItem(body, "key"));
+            if (key) {
+                err = usb_hid_media_named(key);
+            }
+        } else if (type && strcmp(type, "key") == 0) {
+            long usage = json_long(cJSON_GetObjectItem(body, "usage"));
+            long modifier = json_long(cJSON_GetObjectItem(body, "modifier"));
+            if (usage > 0 && usage <= 255 && modifier >= 0 && modifier <= 255) {
+                err = usb_hid_key((uint8_t)usage, (uint8_t)modifier);
+            }
+        }
+        cJSON_Delete(body);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "BLE HID write failed: %s", esp_err_to_name(err));
+            return err == ESP_ERR_NOT_SUPPORTED ? 0x82 : 0x83;
+        }
+        return 0;
+    }
+
     return BLE_ATT_ERR_UNLIKELY;
 }
 
@@ -118,6 +302,32 @@ static const struct ble_gatt_svc_def k_ble_gatt_svcs[] = {
                 .access_cb = ble_gatt_access,
                 .arg = (void *)3,
                 .flags = BLE_GATT_CHR_F_READ,
+            },
+            {
+                .uuid = &k_ble_screen_uuid.u,
+                .access_cb = ble_gatt_access,
+                .arg = (void *)4,
+                .flags = BLE_GATT_CHR_F_WRITE,
+            },
+            {
+                .uuid = &k_ble_ota_ctl_uuid.u,
+                .access_cb = ble_gatt_access,
+                .arg = (void *)5,
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
+            },
+            {
+                /* Write-without-response keeps the transfer at full speed;
+                 * writes-with-response still work for slow senders. */
+                .uuid = &k_ble_ota_data_uuid.u,
+                .access_cb = ble_gatt_access,
+                .arg = (void *)6,
+                .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
+            },
+            {
+                .uuid = &k_ble_hid_uuid.u,
+                .access_cb = ble_gatt_access,
+                .arg = (void *)7,
+                .flags = BLE_GATT_CHR_F_WRITE,
             },
             { 0 }, /* no more characteristics in this service */
         },

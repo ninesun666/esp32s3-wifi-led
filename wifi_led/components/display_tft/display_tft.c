@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_heap_caps.h"
@@ -35,6 +36,21 @@ static esp_lcd_panel_io_handle_t s_io;
 static uint16_t *s_strip;
 static int s_width = CONFIG_WIFI_LED_TFT_WIDTH;
 static int s_height = CONFIG_WIFI_LED_TFT_HEIGHT;
+
+/* Manual paints (fill/bars) own the panel until the next emote_show: while
+ * held, renderer flushes are acked without being drawn, so a fill is not
+ * overwritten by the next animation frame. */
+static volatile bool s_manual_hold;
+
+/* Fill/bars draw strip by strip and wait for each transfer-done announce: the
+ * io callback announces every transaction, and a still-queued strip would race
+ * the renderer's flush ack there. Waiting keeps our strips out of the queue,
+ * so any announce left over belongs to the renderer. */
+static volatile bool s_strip_awaits;
+static SemaphoreHandle_t s_strip_done;
+
+static bool panel_trans_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t *edata,
+                             void *user_ctx);
 
 #if CONFIG_WIFI_LED_TFT_EMOTE_ENABLE
 static emote_handle_t s_emote;
@@ -85,12 +101,30 @@ static uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b)
     return ((uint16_t)(r >> 3) << 11) | ((uint16_t)(g >> 2) << 5) | (uint16_t)(b >> 3);
 }
 
+/* One strip, synchronously: queue it, then wait for its announce. */
+static void draw_strip_sync(const char *what, int y, int rows)
+{
+    s_strip_awaits = true;
+    esp_err_t err = esp_lcd_panel_draw_bitmap(s_panel, 0, y, s_width, y + rows, s_strip);
+    if (err != ESP_OK) {
+        s_strip_awaits = false;
+        ESP_LOGE(TAG, "%s strip at y=%d failed: %s", what, y, esp_err_to_name(err));
+        return;
+    }
+    if (!xSemaphoreTake(s_strip_done, pdMS_TO_TICKS(100))) {
+        /* Nothing will announce this transfer, so stop expecting it. */
+        s_strip_awaits = false;
+        ESP_LOGE(TAG, "%s strip at y=%d timed out", what, y);
+    }
+}
+
 bool display_tft_fill(uint8_t r, uint8_t g, uint8_t b)
 {
     if (!display_tft_ready()) {
         return false;
     }
 
+    s_manual_hold = true;
     display_tft_emote_visible(false);
 
     uint16_t px = rgb565(r, g, b);
@@ -101,11 +135,7 @@ bool display_tft_fill(uint8_t r, uint8_t g, uint8_t b)
     panel_lock();
     for (int y = 0; y < s_height; y += STRIP_ROWS) {
         int rows = s_height - y < STRIP_ROWS ? s_height - y : STRIP_ROWS;
-        esp_err_t err = esp_lcd_panel_draw_bitmap(s_panel, 0, y, s_width, y + rows, s_strip);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "fill strip at y=%d failed: %s", y, esp_err_to_name(err));
-            break;
-        }
+        draw_strip_sync("fill", y, rows);
     }
     panel_unlock();
     return true;
@@ -121,6 +151,7 @@ void display_tft_bars(void)
         return;
     }
 
+    s_manual_hold = true;
     display_tft_emote_visible(false);
 
     panel_lock();
@@ -132,11 +163,7 @@ void display_tft_bars(void)
                                          : (x < 2 * s_width / 3 ? rgb565(0, 255, 0)
                                                                 : rgb565(0, 0, 255));
         }
-        esp_err_t err = esp_lcd_panel_draw_bitmap(s_panel, 0, y, s_width, y + rows, s_strip);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "bars strip at y=%d failed: %s", y, esp_err_to_name(err));
-            break;
-        }
+        draw_strip_sync("bars", y, rows);
     }
     panel_unlock();
 }
@@ -155,6 +182,13 @@ static volatile bool s_emote_awaits_ack;
 static void emote_flush(int x_start, int y_start, int x_end, int y_end, const void *data,
                         emote_handle_t handle)
 {
+    if (s_manual_hold) {
+        /* A manual paint owns the panel. Ack without drawing: the render task
+         * blocks on this ack while holding the gfx lock, so skipping the ack
+         * would wedge the lock for every other writer. */
+        emote_notify_flush_finished(handle);
+        return;
+    }
     s_emote_awaits_ack = true;
     esp_err_t err = esp_lcd_panel_draw_bitmap(s_panel, x_start, y_start, x_end, y_end, data);
     if (err != ESP_OK) {
@@ -166,18 +200,6 @@ static void emote_flush(int x_start, int y_start, int x_end, int y_end, const vo
                  esp_err_to_name(err));
         emote_notify_flush_finished(handle);
     }
-}
-
-static bool emote_trans_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t *edata,
-                             void *user_ctx)
-{
-    (void)io;
-    (void)edata;
-    if (s_emote_awaits_ack) {
-        s_emote_awaits_ack = false;
-        emote_notify_flush_finished((emote_handle_t)user_ctx);
-    }
-    return true;
 }
 
 static bool emote_bring_up(void)
@@ -202,7 +224,7 @@ static bool emote_bring_up(void)
         return false;
     }
 
-    const esp_lcd_panel_io_callbacks_t cbs = { .on_color_trans_done = emote_trans_done };
+    const esp_lcd_panel_io_callbacks_t cbs = { .on_color_trans_done = panel_trans_done };
     esp_err_t err = esp_lcd_panel_io_register_event_callbacks(s_io, &cbs, s_emote);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "flush-ready callback not registered: %s", esp_err_to_name(err));
@@ -240,6 +262,7 @@ bool display_tft_emote_show(const char *name)
         return false;
     }
 
+    s_manual_hold = false;
     display_tft_emote_visible(true);
     return emote_set_anim_emoji(s_emote, name) == ESP_OK;
 }
@@ -275,6 +298,32 @@ void display_tft_emote_visible(bool visible)
 }
 
 #endif
+
+/* The panel io announces *every* finished transaction here: both the strips
+ * queued by fill/bars (draw_strip_sync waits for its own) and the renderer's
+ * flush chunks, which are acked to the gfx engine exactly once -- the sorting
+ * works because the gfx lock serializes who may queue a transaction, so at
+ * any moment only one party can have announces outstanding. */
+static bool panel_trans_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t *edata,
+                             void *user_ctx)
+{
+    (void)io;
+    (void)edata;
+    if (s_strip_awaits) {
+        s_strip_awaits = false;
+        BaseType_t woken = pdFALSE;
+        xSemaphoreGiveFromISR(s_strip_done, &woken);
+        portYIELD_FROM_ISR(woken);
+        return true;
+    }
+#if CONFIG_WIFI_LED_TFT_EMOTE_ENABLE
+    if (s_emote_awaits_ack) {
+        s_emote_awaits_ack = false;
+        emote_notify_flush_finished((emote_handle_t)user_ctx);
+    }
+#endif
+    return true;
+}
 
 static void backlight_on(void)
 {
@@ -337,7 +386,19 @@ static esp_err_t bring_up(void)
     esp_lcd_panel_disp_on_off(s_panel, true);
 
     s_strip = heap_caps_malloc(STRIP_PIXELS * BYTES_PER_PIXEL, MALLOC_CAP_DMA);
-    return s_strip ? ESP_OK : ESP_ERR_NO_MEM;
+    if (!s_strip) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    s_strip_done = xSemaphoreCreateBinary();
+    if (!s_strip_done) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    /* Registered here so manual strips get their done-announces even without
+     * the emote engine; emote_bring_up re-registers with the gfx handle. */
+    const esp_lcd_panel_io_callbacks_t cbs = { .on_color_trans_done = panel_trans_done };
+    return esp_lcd_panel_io_register_event_callbacks(s_io, &cbs, NULL);
 }
 
 void display_tft_start(void)

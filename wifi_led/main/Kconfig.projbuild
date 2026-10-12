@@ -178,4 +178,16 @@ menu "Wi-Fi LED monitor"
         depends on EXAMPLE_BLE_ENABLE
         default "ESP32-LED"
 
+    config WIFI_LED_USB_HID_ENABLE
+        bool "Act as USB HID keyboard/media remote (OTG port)"
+        default n
+        help
+            Shows the board up on the PC as a keyboard + media keys; BLE
+            characteristic 0007 (or the app's remote card) drives it. This
+            claims GPIO19/20 for the OTG peripheral, which DISABLES the
+            USB-Serial-JTAG console and flashing through it. Also switch the
+            console off this port (enable CONFIG_ESP_CONSOLE_UART_DEFAULT so
+            logs go to UART0 on GPIO43/44). Re-flashing afterwards needs the
+            BOOT-held ROM mode or an OTA to an HID-off build.
+
 endmenu

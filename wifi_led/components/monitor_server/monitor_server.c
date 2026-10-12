@@ -7,6 +7,8 @@
  */
 
 #include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -19,6 +21,8 @@
 #include "status_light.h"
 #include "display_tft.h"
 #include "i2c_probe.h"
+#include "ota_update.h"
+#include "usb_hid.h"
 #include "monitor_server.h"
 #include "web_index.h"
 
@@ -78,6 +82,14 @@ char *monitor_server_status_json(bool with_clients)
     cJSON_AddStringToObject(root, "host", host);
     cJSON_AddBoolToObject(root, "screen_ready", display_tft_ready());
     cJSON_AddBoolToObject(root, "emote_ready", display_tft_emote_ready());
+
+    usb_hid_stats_t usb;
+    usb_hid_stats(&usb);
+    cJSON_AddBoolToObject(root, "usb_mounted", usb.mounted);
+    cJSON_AddBoolToObject(root, "usb_suspended", usb.suspended);
+    cJSON_AddBoolToObject(root, "usb_ready", usb.ready);
+    cJSON_AddNumberToObject(root, "hid_send_ok", usb.send_ok);
+    cJSON_AddNumberToObject(root, "hid_send_fail", usb.send_fail);
 
 #if CONFIG_WIFI_LED_I2C_PROBE_ENABLE
     uint8_t addrs[MAX_I2C_REPORT];
@@ -210,14 +222,11 @@ static esp_err_t led_post_handler(httpd_req_t *req)
 
 /* POST /api/screen {"emote":"happy"} shows a face from the anim_icon asset pack;
  * {"r":255,"g":0,"b":0} repaints the whole TFT one colour; {"pattern":"bars"}
- * repaints the red/green/blue wiring-proof bars. */
-static esp_err_t screen_handler(httpd_req_t *req)
+ * repaints the red/green/blue wiring-proof bars. The same logic backs the BLE
+ * screen characteristic (0004). */
+bool monitor_server_screen_apply(const cJSON *body, const char **what_out,
+                                 const char **why_out)
 {
-    cJSON *body = read_json_body(req);
-    if (!body) {
-        return ESP_FAIL;
-    }
-
     long r = json_int(body, "r", 0, 0, 255);
     long g = json_int(body, "g", 0, 0, 255);
     long b = json_int(body, "b", 0, 0, 255);
@@ -232,7 +241,6 @@ static esp_err_t screen_handler(httpd_req_t *req)
             strcpy(emote_name, emote->valuestring);
         }
     }
-    cJSON_Delete(body);
 
     bool ok;
     const char *what;
@@ -258,8 +266,101 @@ static esp_err_t screen_handler(httpd_req_t *req)
         ok = display_tft_fill((uint8_t)r, (uint8_t)g, (uint8_t)b);
     }
 
+    if (what_out) {
+        *what_out = what;
+    }
+    if (why_out) {
+        *why_out = why;
+    }
+    return ok;
+}
+
+static esp_err_t screen_handler(httpd_req_t *req)
+{
+    cJSON *body = read_json_body(req);
+    if (!body) {
+        return ESP_FAIL;
+    }
+
+    const char *what = "(none)";
+    const char *why = "panel not ready";
+    bool ok = monitor_server_screen_apply(body, &what, &why);
+    cJSON_Delete(body);
+
     ESP_LOGI(TAG, "screen <- %s %s", what, ok ? "done" : why);
     return send_ok(req, ok, ok ? NULL : why);
+}
+
+/* POST /api/ota -- the request body IS the .bin image, streamed straight into
+ * the spare OTA slot. Deliberately not read_json_body: a 1.5 MB image would
+ * never fit, so the handler consumes it in 4 KB chunks. The browser sends the
+ * file raw (no JSON wrapper), so no SHA is available here -- size-only checks;
+ * the BLE path carries a sha256 instead. */
+#define OTA_RECV_BUF 4096
+
+static esp_err_t ota_handler(httpd_req_t *req)
+{
+    if (!link_state_has_ip()) {
+        return send_ok(req, false, "board is not on Wi-Fi yet");
+    }
+    if (ota_update_busy()) {
+        return send_ok(req, false, "another update is running");
+    }
+    if (req->content_len <= 0) {
+        return send_ok(req, false, "empty body (expect raw .bin)");
+    }
+
+    esp_err_t err = ota_update_begin((size_t)req->content_len, false, NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "ota begin failed: %s", esp_err_to_name(err));
+        return send_ok(req, false, esp_err_to_name(err));
+    }
+
+    char *buf = malloc(OTA_RECV_BUF);
+    if (!buf) {
+        ota_update_abort();
+        return send_ok(req, false, "out of memory");
+    }
+
+    int64_t remaining = req->content_len;
+    esp_err_t fail = ESP_OK;
+    const char *why = NULL;
+    while (remaining > 0) {
+        int want = remaining > OTA_RECV_BUF ? OTA_RECV_BUF : (int)remaining;
+        int got = httpd_req_recv(req, buf, want);
+        if (got <= 0) {
+            fail = ESP_ERR_TIMEOUT;
+            why = "connection stalled mid-upload";
+            break;
+        }
+        err = ota_update_write(buf, (size_t)got);
+        if (err != ESP_OK) {
+            fail = err;
+            why = esp_err_to_name(err);
+            break;
+        }
+        remaining -= got;
+    }
+    free(buf);
+
+    if (fail == ESP_OK) {
+        err = ota_update_finish();
+        if (err != ESP_OK) {
+            fail = err;
+            why = esp_err_to_name(err);
+        }
+    } else {
+        ota_update_abort();
+    }
+    if (fail != ESP_OK) {
+        ESP_LOGE(TAG, "ota upload failed: %s", why);
+        return send_ok(req, false, why);
+    }
+
+    /* Ack first, restart after -- the response must reach the browser. */
+    ESP_LOGI(TAG, "ota image accepted (%d bytes), rebooting", req->content_len);
+    ota_update_reboot_later();
+    return send_ok(req, true, NULL);
 }
 
 static void start_mdns(void)
@@ -284,6 +385,9 @@ void monitor_server_start(void)
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.lru_purge_enable = true;
     cfg.server_port = CONFIG_WIFI_LED_HTTP_PORT;
+    /* A 2 MB image trickles in over Wi-Fi; the default 10 s recv timeout is
+     * tighter than a slow laptop uploader on a busy 2.4 GHz channel. */
+    cfg.recv_wait_timeout = 30;
     /* cJSON building both the status object and the reply needs more than the
      * 4096 default once the client list is full. */
     cfg.stack_size = 8192;
@@ -299,6 +403,7 @@ void monitor_server_start(void)
         { .uri = "/api/led",    .method = HTTP_GET,  .handler = led_get_handler },
         { .uri = "/api/led",    .method = HTTP_POST, .handler = led_post_handler },
         { .uri = "/api/screen", .method = HTTP_POST, .handler = screen_handler },
+        { .uri = "/api/ota",    .method = HTTP_POST, .handler = ota_handler },
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
         httpd_register_uri_handler(server, &uris[i]);

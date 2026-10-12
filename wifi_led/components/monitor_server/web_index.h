@@ -94,6 +94,14 @@ h1{font-size:17px;margin:0 0 14px;font-weight:600}
 </div>
 <div id="emsg" style="color:#8b949e;font-size:12px;margin-top:6px"></div>
 </div>
+<div class="c" style="margin-top:10px" id="otacard">
+<div class="k">固件升级（OTA，.bin 直接写入备用分区，写完自动重启）</div>
+<input type="file" id="otabin" accept=".bin" style="margin-top:8px;color:var(--fg)">
+<div class="btns"><button class="btn" id="otago">上传并升级</button></div>
+<div style="height:8px;background:var(--line);border-radius:4px;margin-top:8px;overflow:hidden">
+<div id="otabar" style="height:100%;width:0;background:#1f6feb;transition:width .2s"></div></div>
+<div id="otamsg" style="color:#8b949e;font-size:12px;margin-top:6px"></div>
+</div>
 <div class="foot" id="foot">等待数据…</div>
 <script>
 var hist=[];
@@ -137,6 +145,32 @@ async function paintScreen(body,target){
 }
 function setScreen(r,g,b){paintScreen({r:r,g:g,b:b})}
 function setEmote(n){paintScreen({emote:n},'emsg')}
+$('otago').addEventListener('click',function(){
+ var f=$('otabin').files[0];
+ if(!f){$('otamsg').textContent='先选一个 .bin 文件';return}
+ var xhr=new XMLHttpRequest();
+ xhr.open('POST','/api/ota');
+ $('otamsg').textContent='上传中 0%';
+ $('otabar').style.width='0%';
+ xhr.upload.onprogress=function(e){
+  if(e.lengthComputable){
+   var p=Math.round(e.loaded*100/e.total);
+   $('otabar').style.width=p+'%';
+   $('otamsg').textContent='上传中 '+p+'%';
+  }};
+ xhr.onload=function(){
+  var d={};try{d=JSON.parse(xhr.responseText)}catch(e){}
+  if(xhr.status===200&&d.ok){
+   $('otabar').style.width='100%';
+   $('otamsg').textContent='写入完成，板子重启中…几秒后自动刷新';
+   setTimeout(function(){location.reload()},6000);
+  }else{
+   $('otamsg').textContent='失败 HTTP '+xhr.status+' '+(d.error||'');
+   $('otabar').style.width='0%';
+  }};
+ xhr.onerror=function(){$('otamsg').textContent='上传中断（连接断了）';$('otabar').style.width='0%'};
+ xhr.send(f);
+});
 async function tick(){
  try{
   var r=await fetch('/api/status',{cache:'no-store'});var d=await r.json();

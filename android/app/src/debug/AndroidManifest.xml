@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 仅 debug 构建：本地假更新服务器走 http://127.0.0.1（adb reverse），放行明文流量 -->
+    <application android:usesCleartextTraffic="true" />
+</manifest>

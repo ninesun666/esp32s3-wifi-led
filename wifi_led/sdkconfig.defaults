@@ -17,6 +17,9 @@ CONFIG_SPIRAM_IGNORE_NOTFOUND=y
 # --- OTA-ready layout (otadata + two app slots) ---
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+# New slot starts in "pending verify": app_main marks it valid after a clean
+# boot, and the bootloader falls back to the old slot if it crashes first.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
 # --- Board pins and endpoints (see main/Kconfig.projbuild) ---
 CONFIG_WIFI_LED_RGB_GPIO=48

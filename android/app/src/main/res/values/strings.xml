@@ -1,0 +1,65 @@
+<resources>
+    <string name="app_name">ESP32 LED</string>
+
+    <string name="btn_connect">连接灯控</string>
+    <string name="btn_connecting">连接中…</string>
+    <string name="btn_scanning">搜索 ESP32-LED…</string>
+    <string name="btn_disconnect">断开连接</string>
+
+    <string name="title_controls">灯带控制</string>
+    <string name="title_status">板子状态</string>
+    <string name="label_color">颜色</string>
+    <string name="label_brightness">亮度</string>
+    <string name="fx_solid">常亮</string>
+    <string name="fx_breathe">呼吸</string>
+    <string name="fx_rainbow">彩虹</string>
+    <string name="fx_off">关闭</string>
+    <string name="btn_auto">恢复自动</string>
+    <string name="btn_refresh">刷新</string>
+
+    <string name="title_screen">屏幕表情</string>
+    <string name="btn_fill">全屏填色</string>
+    <string name="btn_bars">接线彩条</string>
+    <string name="emote_happy">开心</string>
+    <string name="emote_laugh">大笑</string>
+    <string name="emote_wink">眨眼</string>
+    <string name="emote_surprised">惊讶</string>
+    <string name="emote_sad">难过</string>
+    <string name="emote_cry">哭</string>
+    <string name="emote_sleep">睡觉</string>
+
+    <string name="title_hid">电脑遥控（板子插电脑 USB 口）</string>
+    <string name="hid_hint">板子作为键盘/媒体键发给电脑，文本走键盘打字</string>
+    <string name="hid_play">播放/暂停</string>
+    <string name="hid_prev">上一首</string>
+    <string name="hid_next">下一首</string>
+    <string name="hid_mute">静音</string>
+    <string name="hid_vol_up">音量+</string>
+    <string name="hid_vol_down">音量-</string>
+    <string name="hid_lock">锁屏</string>
+    <string name="hid_text_hint">发给电脑的文字</string>
+    <string name="hid_send">发送</string>
+    <string name="hid_unavailable">板子固件不支持电脑遥控（HID 未启用）</string>
+
+    <string name="title_update">软件更新</string>
+    <string name="update_version_fmt">当前版本 v%1$s</string>
+    <string name="btn_check_update">检查更新</string>
+    <string name="update_checking">正在检查更新…</string>
+    <string name="update_latest">已是最新版本</string>
+    <string name="update_found_fmt">发现新版本 v%1$s，下载中 %2$d%%</string>
+    <string name="update_downloaded">下载完成，正在打开安装界面…</string>
+    <string name="update_download_failed_fmt">下载失败：%1$s</string>
+    <string name="update_grant_hint">请先允许本应用"安装未知应用"，允许后再点一次检查更新</string>
+
+    <string name="mode_idle">未连接</string>
+    <string name="mode_auto">当前：自动（跟随链路状态）</string>
+    <string name="mode_manual">当前：接管 · %1$s</string>
+    <string name="status_idle">连接后显示板子状态</string>
+
+    <string name="toast_bt_off">请先打开蓝牙</string>
+    <string name="toast_no_permission">缺少蓝牙权限，无法扫描</string>
+    <string name="toast_not_found">12 秒内未发现 ESP32-LED</string>
+    <string name="toast_scan_failed">扫描失败</string>
+    <string name="toast_write_failed">写入失败</string>
+    <string name="toast_found">发现 ESP32-LED，连接中…</string>
+</resources>

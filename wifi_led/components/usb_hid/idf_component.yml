@@ -1,0 +1,6 @@
+## Managed dependency fetched only when the HID toggle is on, so the
+## HID-off firmware build never downloads or compiles the USB stack.
+## ($CONFIG{} rules compare against True/False -- see lvgl's manifest.)
+dependencies:
+  espressif/esp_tinyusb: { version: "^1.6.0", rules:
+    [{ if: "$CONFIG{WIFI_LED_USB_HID_ENABLE} == True" }] }
