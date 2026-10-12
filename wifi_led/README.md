@@ -95,6 +95,9 @@ BLE 和网页共用同一条 `status_light_ctl_from_json()` / `monitor_server_st
   - `{"pattern":"bars"}` 重画红/绿/蓝三色竖条（接线自检测，不用按板子的复位键）。
   - `{"r":0-255,"g":0-255,"b":0-255}` 整屏一色。
   手动刷屏会让表情隐身，直到下一次 `emote` 请求 —— 屏没有"交还状态机"的概念，画面一直保留。
+  例外是空闲打瞌睡：任何屏幕指令（emote/三色条/填色，网页和 BLE 同源）之后
+  `WIFI_LED_TFT_IDLE_EMOTE_SEC`（默认 180 s）没有再动屏，固件自动切到
+  `WIFI_LED_TFT_IDLE_EMOTE_NAME`（默认 `sleepy`）——填色画面也会被它顶掉；纯灯控不重置计时。
   屏没起来时回 `{"ok":false,"error":"panel not ready"}`。
 - mDNS —— 板子应答 `http://<WIFI_LED_MDNS_HOSTNAME>.local/`（默认 `esp32-monitor`），
   不用记住 DHCP 地址。个别 Windows 解析不了 `.local`，退回 IP 即可。
