@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+本仓库的 AI 代理工作指引（原 CLAUDE.md 更名，仓库统一使用 agents.md 规范）。
 
 ## 这是什么
 
@@ -56,3 +56,16 @@ macOS/Linux 下在 `wifi_led/` 里直接 `idf.py set-target esp32s3`、`idf.py b
 SoftAP 兜底默认编译掉（`CONFIG_WIFI_LED_AP_ENABLE` 未设置）：Windows 电脑一连上就把板子提成默认网关，而 esp_wifi 的 AP 不会 NAT 到 STA 上行，这台电脑就断网直到断开热点。要打开：在 `main/Kconfig.projbuild` 里设 y，然后 `rm sdkconfig` 重新 build。
 
 所有项目旋钮（SSID、密码、灯脚/数量、单色灯、AP 设置、屏引脚、BLE 开关/广播名）都是 `main/Kconfig.projbuild` 里的 Kconfig 选项，没有硬编码。分区表 `partitions.csv` 是 OTA 布局（ota_0/ota_1 各 4 MiB + anim_icon 3 MiB 放表情资源）。托管组件：`espressif/led_strip`（RMT 驱动）、`espressif/mdns`、`espressif2022/esp_emote_expression`（表情栈，连带 LVGL 等 14 个依赖）。
+
+## 复盘：App 自动推送更新（2026-10-12，复刻指南）
+
+1. 侧载 App 无法静默自装，自动更新的最优形态是"启动静默检查 → 后台下载 → 系统通知 → 用户点一下安装"，实现集中在 `android/app/src/main/java/com/ninesun666/espled/AutoUpdater.kt` + `UpdateChecker.kt`，两个文件可完整复刻。
+2. `UpdateChecker` 的 check/download/install 管线（GitHub Releases API + HttpURLConnection + FileProvider 拉起安装器）先于自动推送存在，加自动触发层时不重写管线。
+3. 下载缓存以版本入文件名（`esp32-led-{ver}.apk`，先写 `.part` 再原子 rename），"文件存在"即"该版本完整"，免掉 sidecar 状态文件的三态一致性问题；`cachedNewerApk()` 一个函数同时服务跳过下载、按钮快路径和过期通知门控。
+4. 下载用应用级 `CoroutineScope(SupervisorJob() + Main)` 而非 `lifecycleScope`，返回键退出后下载继续、通知仍能到达；UI 通过 `host` 字段（onCreate 注册、onDestroy 置空、用时判 isFinishing）解耦。
+5. 权限策略：POST_NOTIFICATIONS 在首次下载完成那一刻才请求，"安装未知应用"在首次点安装时才跳设置页，两者绝不并进蓝牙权限组（那边的回调是全 granted 才开始扫描）。
+6. 发布即打标签：仓库 secrets 已配好，`git tag -a v0.0.3 -m "..." && git push origin v0.0.3`，CI（`.github/workflows/android-release.yml`）自动签正式包挂 Release，`versionName/versionCode` 从标签派生。
+7. 本地端到端验证不碰真实 GitHub：`adb reverse tcp:8099 tcp:8099` + `python3 -m http.server -d <dir> 8099` 摆出 `/repos/<repo>/releases/latest` 假 JSON，再构建两个 `-PappVersionName=1.0.0/9.9.9 -PupdateApiBase=http://127.0.0.1:8099` 的 debug 包（debug manifest 的 `usesCleartextTraffic` 就是为这条路预留的）。
+8. 模拟器上盲操作 UI 用 `adb shell input tap` + `uiautomator dump`（抓控件树当"眼睛"）+ `dumpsys notification/package` 查状态，关键断言：二次启动零下载请求、旋转零多余 API 调用、缓存被清后点通知能自动重下。
+9. 真机陷阱：debug 与正式签名不互通，旧 debug 包必须先卸载再装 Release 包；真机生产系统不允许 adb 代授运行时权限（`pm grant`/`appops set` 都会被拒），权限必须走 App 内真实弹窗。
+10. 旋转会重建 Activity 丢失"已就绪"卡片状态，修复是在 onCreate 里从 `cachedNewerApk()` 恢复文案（不发网络、不重复请求权限）——任何"异步流程改 UI"的功能都要考虑这一条。
