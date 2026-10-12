@@ -95,12 +95,12 @@ class MainActivity : AppCompatActivity(), LedManager.Listener {
             manager.readLedCtl()
         }
         binding.btnEmoteHappy.setOnClickListener { sendScreen("""{"emote":"happy"}""") }
-        binding.btnEmoteLaugh.setOnClickListener { sendScreen("""{"emote":"laugh"}""") }
-        binding.btnEmoteWink.setOnClickListener { sendScreen("""{"emote":"wink"}""") }
+        binding.btnEmoteLaugh.setOnClickListener { sendScreen("""{"emote":"laughing"}""") }
+        binding.btnEmoteWink.setOnClickListener { sendScreen("""{"emote":"winking"}""") }
         binding.btnEmoteSurprised.setOnClickListener { sendScreen("""{"emote":"surprised"}""") }
         binding.btnEmoteSad.setOnClickListener { sendScreen("""{"emote":"sad"}""") }
-        binding.btnEmoteCry.setOnClickListener { sendScreen("""{"emote":"cry"}""") }
-        binding.btnEmoteSleep.setOnClickListener { sendScreen("""{"emote":"sleep"}""") }
+        binding.btnEmoteCry.setOnClickListener { sendScreen("""{"emote":"crying"}""") }
+        binding.btnEmoteSleep.setOnClickListener { sendScreen("""{"emote":"sleepy"}""") }
         binding.btnBars.setOnClickListener { sendScreen("""{"pattern":"bars"}""") }
         binding.btnFill.setOnClickListener {
             val o = JSONObject()

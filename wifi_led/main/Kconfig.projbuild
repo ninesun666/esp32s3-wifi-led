@@ -143,6 +143,27 @@ menu "Wi-Fi LED monitor"
         depends on WIFI_LED_TFT_EMOTE_ENABLE
         default "anim_icon"
 
+    config WIFI_LED_TFT_IDLE_EMOTE_ENABLE
+        bool "Play a dozing emote after idle"
+        depends on WIFI_LED_TFT_EMOTE_ENABLE
+        default y
+        help
+            When no screen command (emote/fill/bars, from the web page or BLE)
+            has arrived for WIFI_LED_TFT_IDLE_EMOTE_SEC, switch the face to
+            WIFI_LED_TFT_IDLE_EMOTE_NAME. Any screen command resets the timer;
+            LED-only control does not.
+
+    config WIFI_LED_TFT_IDLE_EMOTE_NAME
+        string "Idle emote name"
+        depends on WIFI_LED_TFT_IDLE_EMOTE_ENABLE
+        default "sleepy"
+
+    config WIFI_LED_TFT_IDLE_EMOTE_SEC
+        int "Idle seconds before the dozing emote"
+        depends on WIFI_LED_TFT_IDLE_EMOTE_ENABLE
+        default 180
+        range 10 3600
+
     config WIFI_LED_AP_ENABLE
         bool "Run a fallback SoftAP on the board"
         default n

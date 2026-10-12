@@ -10,6 +10,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_heap_caps.h"
@@ -51,6 +52,36 @@ static SemaphoreHandle_t s_strip_done;
 
 static bool panel_trans_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t *edata,
                              void *user_ctx);
+
+#if CONFIG_WIFI_LED_TFT_IDLE_EMOTE_ENABLE
+/* Dozes off after WIFI_LED_TFT_IDLE_EMOTE_SEC without a screen command. Every
+ * paint (emote/fill/bars) pokes this task, which restarts the wait; the timeout
+ * leg just plays the idle face like any other emote_show caller would. */
+static TaskHandle_t s_idle_task;
+
+static void idle_reset(void)
+{
+    if (s_idle_task) {
+        xTaskNotifyGive(s_idle_task);
+    }
+}
+
+static void idle_task(void *arg)
+{
+    const TickType_t wait = pdMS_TO_TICKS(CONFIG_WIFI_LED_TFT_IDLE_EMOTE_SEC * 1000);
+    while (true) {
+        if (ulTaskNotifyTake(pdTRUE, wait) == 0) {
+            ESP_LOGI(TAG, "idle for %d s, showing %s",
+                     CONFIG_WIFI_LED_TFT_IDLE_EMOTE_SEC, CONFIG_WIFI_LED_TFT_IDLE_EMOTE_NAME);
+            display_tft_emote_show(CONFIG_WIFI_LED_TFT_IDLE_EMOTE_NAME);
+        }
+    }
+}
+#else
+static void idle_reset(void)
+{
+}
+#endif
 
 #if CONFIG_WIFI_LED_TFT_EMOTE_ENABLE
 static emote_handle_t s_emote;
@@ -123,6 +154,7 @@ bool display_tft_fill(uint8_t r, uint8_t g, uint8_t b)
     if (!display_tft_ready()) {
         return false;
     }
+    idle_reset();
 
     s_manual_hold = true;
     display_tft_emote_visible(false);
@@ -150,6 +182,7 @@ void display_tft_bars(void)
     if (!display_tft_ready()) {
         return;
     }
+    idle_reset();
 
     s_manual_hold = true;
     display_tft_emote_visible(false);
@@ -264,6 +297,7 @@ bool display_tft_emote_show(const char *name)
 
     s_manual_hold = false;
     display_tft_emote_visible(true);
+    idle_reset();
     return emote_set_anim_emoji(s_emote, name) == ESP_OK;
 }
 
@@ -424,6 +458,11 @@ void display_tft_start(void)
 #if CONFIG_WIFI_LED_TFT_EMOTE_ENABLE
     if (emote_bring_up()) {
         display_tft_emote_show("happy");
+#if CONFIG_WIFI_LED_TFT_IDLE_EMOTE_ENABLE
+        if (xTaskCreate(idle_task, "tft_idle", 3 * 1024, NULL, 4, &s_idle_task) != pdPASS) {
+            ESP_LOGW(TAG, "idle emote task not created");
+        }
+#endif
     }
 #endif
 #endif
