@@ -7,6 +7,7 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Build
@@ -41,6 +42,11 @@ class MainActivity : AppCompatActivity(), LedManager.Listener {
     ) { grants ->
         if (grants.values.all { it }) startScan() else toast(R.string.toast_no_permission)
     }
+
+    /** 通知权限单独请求，不并进蓝牙那一组——那边是全 granted 才开始扫描。 */
+    private val notifPermLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> if (granted) AutoUpdater.notifyIfReady(applicationContext) }
 
     @SuppressLint("MissingPermission")
     private val scanCallback = object : ScanCallback() {
@@ -116,10 +122,58 @@ class MainActivity : AppCompatActivity(), LedManager.Listener {
         }
         updatePreview()
         setControlsEnabled(false)
+
+        AutoUpdater.onLaunch(this)
+        handleInstallIntent(intent)
+        // 旋转/进程重建后卡片会回到初始文案；已有更新缓存就直接恢复就绪态（不发网络、不重复请求权限）。
+        UpdateChecker.cachedNewerApk(this)?.let {
+            showUpdateStatus(getString(R.string.update_ready_fmt, it.version))
+            binding.btnCheckUpdate.text = getString(R.string.update_btn_install_fmt, it.version)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleInstallIntent(intent)
+    }
+
+    /** 通知点按进来：缓存还在就直接装；被系统清了就回落到检查更新重下。 */
+    private fun handleInstallIntent(intent: Intent) {
+        if (!intent.getBooleanExtra(AutoUpdater.EXTRA_INSTALL, false)) return
+        val cached = UpdateChecker.cachedNewerApk(this) ?: return checkForUpdate()
+        showUpdateStatus(getString(R.string.update_ready_fmt, cached.version))
+        if (!UpdateChecker.install(this, cached.file)) {
+            binding.updateStatus.setText(R.string.update_grant_hint)
+        }
+    }
+
+    /** 供 AutoUpdater 刷更新状态（进度回调在 IO 线程，需经 runOnUiThread）。 */
+    fun showUpdateStatus(text: String) {
+        binding.updateStatus.text = text
+    }
+
+    /** 自动下载完成（前台时）回调：卡片就绪态 + 按钮变安装 + 发通知。 */
+    fun onUpdateReady(version: String) {
+        showUpdateStatus(getString(R.string.update_ready_fmt, version))
+        binding.btnCheckUpdate.text = getString(R.string.update_btn_install_fmt, version)
+        requestNotifyPermissionThenPost()
+    }
+
+    private fun requestNotifyPermissionThenPost() {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this,
+                android.Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED
+        ) {
+            notifPermLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            AutoUpdater.notifyIfReady(applicationContext)
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        AutoUpdater.host = null
         if (manager.isConnected) manager.disconnect().enqueue()
     }
 
@@ -151,6 +205,14 @@ class MainActivity : AppCompatActivity(), LedManager.Listener {
     }
 
     private fun checkForUpdate() {
+        // 已有完整缓存包就直接装，不走网络（自动流程下载完成后的按钮路径）。
+        UpdateChecker.cachedNewerApk(this)?.let { c ->
+            onUpdateReady(c.version)
+            if (!UpdateChecker.install(this, c.file)) {
+                binding.updateStatus.setText(R.string.update_grant_hint)
+            }
+            return
+        }
         binding.btnCheckUpdate.isEnabled = false
         binding.updateStatus.setText(R.string.update_checking)
         lifecycleScope.launch {
@@ -160,7 +222,7 @@ class MainActivity : AppCompatActivity(), LedManager.Listener {
                 is UpdateResult.Available -> {
                     binding.updateStatus.text = getString(R.string.update_found_fmt, r.version, 0)
                     try {
-                        val apk = UpdateChecker.download(this@MainActivity, r.url) { p ->
+                        val apk = UpdateChecker.download(this@MainActivity, r.version, r.url) { p ->
                             runOnUiThread {
                                 binding.updateStatus.text =
                                     getString(R.string.update_found_fmt, r.version, p)

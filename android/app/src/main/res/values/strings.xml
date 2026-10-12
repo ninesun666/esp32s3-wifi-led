@@ -50,6 +50,11 @@
     <string name="update_downloaded">下载完成，正在打开安装界面…</string>
     <string name="update_download_failed_fmt">下载失败：%1$s</string>
     <string name="update_grant_hint">请先允许本应用"安装未知应用"，允许后再点一次检查更新</string>
+    <string name="update_ready_fmt">新版本 v%1$s 已就绪，点通知或下方按钮安装</string>
+    <string name="update_btn_install_fmt">安装 v%1$s</string>
+    <string name="update_notif_title_fmt">发现新版本 v%1$s</string>
+    <string name="update_notif_text">已下载完成，点击安装</string>
+    <string name="update_channel_name">更新提醒</string>
 
     <string name="mode_idle">未连接</string>
     <string name="mode_auto">当前：自动（跟随链路状态）</string>

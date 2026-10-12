@@ -6,6 +6,8 @@ import android.net.Uri
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
@@ -19,6 +21,35 @@ sealed class UpdateResult {
 }
 
 object UpdateChecker {
+
+    /** 手动按钮和自动流程可能同时下载，串行化避免写坏同一个 .part 文件。 */
+    private val downloadMutex = Mutex()
+
+    /** update/ 目录里一个已下载完整的更新包。 */
+    data class Cached(val file: File, val version: String)
+
+    /** update/ 目录里比当前安装版本新的最新缓存包；没有则 null。 */
+    fun cachedNewerApk(context: Context): Cached? =
+        updateDir(context).listFiles { f -> f.name.endsWith(".apk") }
+            ?.mapNotNull { f ->
+                val v = Regex("esp32-led-(.+)\\.apk").find(f.name)?.groupValues?.get(1)
+                if (v != null) Cached(f, v) else null
+            }
+            ?.filter { compareVersions(it.version, BuildConfig.VERSION_NAME) > 0 }
+            ?.maxByOrNull { compareVersions(it.version, BuildConfig.VERSION_NAME) }
+
+    /** 指定版本是否已有完整缓存包（下载成功后 rename 才会出现该文件名）。 */
+    fun cachedApkFor(context: Context, version: String): File? {
+        val f = File(updateDir(context), "esp32-led-$version.apk")
+        return if (f.exists()) f else null
+    }
+
+    /** 已是最新版本时清掉缓存目录（旧缓存包必然不再可用）。 */
+    fun clearCache(context: Context) {
+        updateDir(context).deleteRecursively()
+    }
+
+    private fun updateDir(context: Context) = File(context.cacheDir, "update")
 
     suspend fun check(): UpdateResult = withContext(Dispatchers.IO) {
         try {
@@ -75,10 +106,12 @@ object UpdateChecker {
         seg.takeWhile(Char::isDigit).takeIf { it.isNotEmpty() }?.toIntOrNull()
     }
 
-    suspend fun download(context: Context, url: String, onProgress: (Int) -> Unit): File =
+    /** 下载到 esp32-led-{version}.apk：先写 .part，成功后 rename，文件存在即代表该版本完整。 */
+    suspend fun download(context: Context, version: String, url: String,
+                         onProgress: (Int) -> Unit): File = downloadMutex.withLock {
         withContext(Dispatchers.IO) {
             val dir = File(context.cacheDir, "update").apply { mkdirs() }
-            val apk = File(dir, "esp32-led.apk")
+            val part = File(dir, "esp32-led.part")
             val conn = URL(url).openConnection() as HttpURLConnection
             try {
                 conn.setRequestProperty("User-Agent", "esp32-led-android")
@@ -87,7 +120,7 @@ object UpdateChecker {
                 if (conn.responseCode != 200) throw RuntimeException("HTTP ${conn.responseCode}")
                 val total = conn.contentLengthLong
                 conn.inputStream.use { input ->
-                    apk.outputStream().use { out ->
+                    part.outputStream().use { out ->
                         val buf = ByteArray(64 * 1024)
                         var done = 0L
                         while (true) {
@@ -99,11 +132,21 @@ object UpdateChecker {
                         }
                     }
                 }
+            } catch (e: Exception) {
+                part.delete()
+                throw e
             } finally {
                 conn.disconnect()
             }
+            val apk = File(dir, "esp32-led-$version.apk")
+            apk.delete()
+            if (!part.renameTo(apk)) {
+                part.delete()
+                throw RuntimeException("重命名缓存文件失败")
+            }
             apk
         }
+    }
 
     /**
      * 拉起系统安装界面。API 26+ 需要"安装未知应用"授权，
