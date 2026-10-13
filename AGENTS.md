@@ -40,14 +40,20 @@ macOS/Linux 下在 `wifi_led/` 里直接 `idf.py set-target esp32s3`、`idf.py b
 
 `sdkconfig`（gitignore）才是编译时真正生效的那份。`sdkconfig.defaults`（已提交：硬件配置）和 `sdkconfig.local`（gitignore：路由器 SSID/密码；模板 `sdkconfig.local.example`）由 `wifi_led/CMakeLists.txt` 里的 `set(SDKCONFIG_DEFAULTS ...)` 合并，但**只在 `sdkconfig` 不存在时才被读取**。改完其中任何一个：`rm wifi_led/sdkconfig` 再 build，否则不生效。Wi-Fi 凭据只放在 `sdkconfig.local`——绝不进代码、日志、提交或文档。
 
+运行时凭据另有去处：**NVS（namespace `wifi`，键 `ssid`/`pass`）优先级高于 `sdkconfig.local`**，后者只剩"烧录时的兜底"这一角色，留着它是为了让重新烧录永远是恢复手段。`CHANGE_ME` 和空串都算"没配"，所以拿模板直接编译的固件不会去连一个不存在的 SSID，而是空等配网。密码只存在于 `wifi_creds` 组件内部，任何 API 回复、BLE 读取和日志都不会带出它。协议单一来源：`docs/wifi_provisioning.md`。
+
+上面那条找回凭据的老办法（从 app 分区里捞字符串）现在多了一个前提：板子如果已被 App 配过网，`sdkconfig.local` 里的值就作不了主，得先 `POST {"cmd":"forget"}` 或直接重新烧录才能回到编译期凭据；NVS 里的密码设计上读不出来，不要试图去 dump 它。
+
 ## 架构
 
-组件工程，围绕一份共享的链路状态展开。之所以把连接和探测放到独立任务：`esp_wifi_connect()` 和外网探测都会阻塞，不能放在事件回调或主循环里。依赖单向：`monitor_server`/`status_light` 只读 `link_state`，`ble_gatt` 读 `status_light` 和 `monitor_server`，`link_state` 不知道其他组件存在。
+组件工程，围绕一份共享的链路状态展开。之所以把连接和探测放到独立任务：`esp_wifi_connect()` 和外网探测都会阻塞，不能放在事件回调或主循环里。依赖单向：`monitor_server`/`status_light` 只读 `link_state`，`ble_gatt` 读 `status_light` 和 `monitor_server`，`monitor_server`/`ble_gatt` 读 `net_config`，`net_config` 读 `wifi_creds` 和 `link_state`，`link_state` 只往下读 `wifi_creds`（叶子），不知道上面几位存在。
 
-- `components/link_state/`——`connect_task` 每次尝试前先扫描并打印所有可见 AP（任何连接失败的诊断记录），锁定目标 SSID 最强的 BSSID，然后按认证模式梯队 `k_attempts[]` 逐级尝试（WPA2 任意 BSS → WPA2 锁定 BSSID → WPA/TKIP → open → WPA3），成功后回到第 0 档；`probe_task` 每 5 s 向 `114.114.114.114:53` 发起 TCP 连接（裸 IP，本地 DNS 坏了也测得出真实外网连通性）；Wi-Fi/IP 事件回调把事件翻译成事件组位（`BIT_GOT_IP`/`BIT_LOST_IP`）并更新状态。
+- `components/wifi_creds/`——Wi-Fi 凭据的唯一存放处：NVS 读写（namespace `wifi`，键 `ssid`/`pass`）、校验（SSID 1–32 字节，密码空或 8–64 字节）、与编译期 Kconfig 值的优先级。密码只在组件内部流动，对外只暴露 `wifi_creds_has_password()` 这种"有没有"的问题。
+- `components/net_config/`——配网协议的单一实现：`{"cmd":"scan"|"set"|"forget"}` + 状态回读 JSON，transport 无关，BLE 0008 和 `/api/wifi` 都调它（`net_config_apply()` / `net_config_status_json()`）。加新传输层时协议改动只在这里。
+- `components/link_state/`——`connect_task` 每次尝试前先扫描并打印所有可见 AP（任何连接失败的诊断记录），锁定目标 SSID 最强的 BSSID，然后按认证模式梯队 `k_attempts[]` 逐级尝试（WPA2 任意 BSS → WPA2 锁定 BSSID → WPA/TKIP → open → WPA3），成功后回到第 0 档；每一轮都重读凭据，所以 `POST /api/wifi` 或 BLE 换网只需要置 `BIT_REJOIN` 就能断开重连，不用重启也不用重新烧录；没配任何网络时不打死循环，只每 5 s 提示"去配网"；`probe_task` 每 5 s 向 `114.114.114.114:53` 发起 TCP 连接（裸 IP，本地 DNS 坏了也测得出真实外网连通性）；Wi-Fi/IP 事件回调把事件翻译成事件组位（`BIT_GOT_IP`/`BIT_LOST_IP`/`BIT_REJOIN`）并更新状态。配网用的扫描跑在**自己的任务**里（`prov_scan_task`——`esp_wifi_scan_start()` 同步模式会阻塞到扫完，不能在读请求的上下文里等），和阶梯的扫描共用一把互斥锁串行化，同一时刻只允许一个在跑。
 - `components/status_light/`——`led_task` 是 WS2812 的唯一写入者（RMT 后端），20 ms 刷新一次；自动模式渲染链路状态：蓝色呼吸 = 连接中，绿色 = 仅连上路由，青色 = 外网也通，紫色 = 有设备接入板子热点。手动接管模式（互斥锁保护的 `status_light_ctl_t`，网页和 BLE 共用）改渲染下发的灯效（solid/breathe/rainbow/off + 亮度），完全覆盖状态色；接管设定只存 RAM，重启回自动。
-- `components/monitor_server/`——`http://<板子IP>/` 的仪表盘以 C11 原始字符串字面量放在 `web_index.h`（改完 JS 用 `check_page_js.py` 验证）；`/api/status` 每次请求现取现算 JSON（`esp_wifi_sta_get_ap_info()` + 堆统计），刻意不缓存，页面不会和驱动实际状态漂移；`/api/led` GET/POST 读写接管设定（字段越界返回 400）；`/api/screen` 驱动外接屏（纯色/三色条/表情）。
-- `components/ble_gatt/`——NimBLE GATT 服务器（`CONFIG_EXAMPLE_BLE_ENABLE`，默认开）：一个 128-bit 自定义服务，LED 特征值收发与 `/api/led` 同款 JSON（非法值返回应用层错误 0x81），状态特征值与 `/api/status` 同字段但去掉热点客户端列表。在 Wi-Fi 完全启动后初始化（照抄官方共存示例顺序），空口分时由 IDF 共存层自动处理。明文免配对——射频内任何人可控灯，要加密加 `BLE_GATT_CHR_F_WRITE_ENC`。单连接，断开自动恢复广播。
+- `components/monitor_server/`——`http://<板子IP>/` 的仪表盘以 C11 原始字符串字面量放在 `web_index.h`（改完 JS 用 `check_page_js.py` 验证）；`/api/status` 每次请求现取现算 JSON（`esp_wifi_sta_get_ap_info()` + 堆统计），刻意不缓存，页面不会和驱动实际状态漂移；`/api/led` GET/POST 读写接管设定（字段越界返回 400）；`/api/screen` 驱动外接屏（纯色/三色条/表情）；`/api/wifi` GET 读当前网络、POST 走 `net_config`（scan/set/forget），回复里永远不含密码。
+- `components/ble_gatt/`——NimBLE GATT 服务器（`CONFIG_EXAMPLE_BLE_ENABLE`，默认开）：一个 128-bit 自定义服务，LED 特征值收发与 `/api/led` 同款 JSON（非法值返回应用层错误 0x81），状态特征值与 `/api/status` 同字段但去掉热点客户端列表。在 Wi-Fi 完全启动后初始化（照抄官方共存示例顺序），空口分时由 IDF 共存层自动处理。明文免配对——射频内任何人可控灯，要加密加 `BLE_GATT_CHR_F_WRITE_ENC`（配网特征值 0008 已经这么做了：`CONFIG_WIFI_LED_BLE_PROV_ENCRYPT=y` 只对 0008 要求配对链路，其它特征值不变；默认关，因为手机 App 还没有配对流程，开着它 App 就配不了网——这是已知取舍，不是已完成）。单连接，断开自动恢复广播。
 - `components/display_tft/`——ST7789 SPI 屏 + `esp_emote` 表情栈（资源烧在 `anim_icon` 分区）；手动刷屏和渲染器共用 panel io 的应答区分是这个组件里最容易踩的死锁，见 README。
 - `components/i2c_probe/`——I2C 总线扫描（默认编译关闭，GPIO 8/9 已被屏占用）。
 

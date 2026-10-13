@@ -41,6 +41,30 @@
     <string name="hid_send">发送</string>
     <string name="hid_unavailable">板子固件不支持电脑遥控（HID 未启用）</string>
 
+    <string name="title_wifi">Wi-Fi 配网</string>
+    <string name="wifi_hint">换网络不用重烧固件：扫描 → 选网络 → 下发。密码只写进板子，App 不保存。</string>
+    <string name="wifi_unsupported">板子固件不支持配网，请先更新固件</string>
+    <string name="wifi_current_fmt">当前：%1$s · 来源 %2$s · 链路 %3$s</string>
+    <string name="wifi_current_none">当前：板子里没有配置任何网络</string>
+    <string name="wifi_source_stored">板内已保存</string>
+    <string name="wifi_source_build">编译时写入</string>
+    <string name="btn_wifi_scan">扫描网络</string>
+    <string name="wifi_network_hint">扫描结果（点一下填进名称）</string>
+    <string name="wifi_scan_item_fmt">%1$s · %2$d dBm · %3$s</string>
+    <string name="wifi_ssid_hint">网络名称（SSID）</string>
+    <string name="wifi_pass_hint">密码（开放网络留空）</string>
+    <string name="btn_wifi_apply">下发到板子</string>
+    <string name="btn_wifi_forget">清除已保存网络</string>
+    <string name="wifi_scanning">板子扫描中…</string>
+    <string name="wifi_scan_empty">没扫到网络，可手动填写名称</string>
+    <string name="wifi_scan_failed">扫描请求失败，稍后再试</string>
+    <string name="wifi_scan_failed_fmt">扫描失败：%1$s</string>
+    <string name="wifi_scan_timeout">15 秒内板子没回扫描结果，重试一次</string>
+    <string name="wifi_missing_ssid">先填网络名称</string>
+    <string name="wifi_applied">已下发，板子正在连接新网络（看下方状态）</string>
+    <string name="wifi_write_failed">下发失败：SSID 需 1–32 字节、密码留空或 8–64 字节；也可能是连接已断或固件太旧</string>
+    <string name="wifi_forgotten">已清除，板子回到编译时的网络</string>
+
     <string name="title_update">软件更新</string>
     <string name="update_version_fmt">当前版本 v%1$s</string>
     <string name="btn_check_update">检查更新</string>

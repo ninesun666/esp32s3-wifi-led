@@ -1,17 +1,24 @@
 menu "Wi-Fi LED monitor"
 
     config WIFI_LED_WIFI_SSID
-        string "Router SSID"
+        string "Router SSID (build-time fallback)"
         default "CHANGE_ME"
         help
             Name of the 2.4GHz access point to join. Put the real value in
             sdkconfig.local, which is gitignored.
 
+            This is the FALLBACK only: a network saved by provisioning
+            (BLE characteristic 0008 or POST /api/wifi) is stored in NVS and
+            wins over it. Keep it filled in anyway -- it is the recovery path
+            for a board that was pointed at a network it can no longer reach,
+            since reflashing restores a known-good target.
+
     config WIFI_LED_WIFI_PASSWORD
-        string "Router password"
+        string "Router password (build-time fallback)"
         default "CHANGE_ME"
         help
-            WPA2/WPA3 passphrase. Empty string for an open network.
+            WPA2/WPA3 passphrase. Empty string for an open network. Fallback
+            only, see WIFI_LED_WIFI_SSID.
 
     config WIFI_LED_RGB_GPIO
         int "WS2812 RGB LED GPIO"
@@ -198,6 +205,25 @@ menu "Wi-Fi LED monitor"
         string "BLE device name"
         depends on EXAMPLE_BLE_ENABLE
         default "ESP32-LED"
+
+    config WIFI_LED_BLE_PROV_ENCRYPT
+        bool "Require an encrypted BLE link to change the Wi-Fi network"
+        depends on EXAMPLE_BLE_ENABLE
+        default n
+        help
+            Off: the Wi-Fi characteristic (0008) is readable and writable by any
+            phone that can reach the board, like the rest of this profile --
+            anyone in radio range can read the passphrase they sniff on the way
+            in, and can point the board at a network of their choosing.
+
+            On: writes to 0008 need an encrypted link, so the phone must be
+            paired with the board first (Android: system Bluetooth -> pair, or
+            the app's pairing request). Reads stay open -- they expose the
+            current SSID only, never the passphrase.
+
+            Default off because an unbonded phone then fails the write with no
+            retry path in the current app. Turn this on for any deployment that
+            is not a desk demo.
 
     config WIFI_LED_USB_HID_ENABLE
         bool "Act as USB HID keyboard/media remote (OTG port)"

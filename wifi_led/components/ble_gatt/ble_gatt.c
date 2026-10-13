@@ -1,11 +1,13 @@
 /*
  * BLE GATT server: one custom service exposing the strip takeover setting, the
  * device status JSON, the screen/emote command, the OTA transfer (control on
- * 0005 + raw image chunks on 0006) and the HID dispatcher (0007), so a phone
- * can drive the board without the web page. The LED characteristic shares
- * status_light's control state with POST /api/led; the status characteristic
- * shares monitor_server's /api/status object (client list dropped so one ATT
- * read carries it); the screen characteristic reuses /api/screen's apply logic.
+ * 0005 + raw image chunks on 0006), the HID dispatcher (0007) and the Wi-Fi
+ * provisioning control (0008), so a phone can drive and configure the board
+ * without the web page. The LED characteristic shares status_light's control
+ * state with POST /api/led; the status characteristic shares monitor_server's
+ * /api/status object (client list dropped so one ATT read carries it); the
+ * screen characteristic reuses /api/screen's apply logic; the Wi-Fi
+ * characteristic is GET/POST /api/wifi over ATT.
  *
  * Everything below compiles away when CONFIG_EXAMPLE_BLE_ENABLE is off (the
  * NimBLE headers do not exist with Bluetooth disabled).
@@ -23,6 +25,7 @@
 #include "cJSON.h"
 #include "status_light.h"
 #include "monitor_server.h"
+#include "net_config.h"
 #include "ota_update.h"
 #include "usb_hid.h"
 #include "nimble/nimble_port.h"
@@ -38,9 +41,11 @@ static const char *TAG = "ble_gatt";
 
 /* One custom 128-bit service, 5d400001-7a9b-4c8e-b2f4-38a1c6e0d951, with a
  * LED characteristic (0002, same JSON as POST /api/led), a read-only
- * status characteristic (0003, same fields as /api/status) and a screen
- * characteristic (0004, same JSON as POST /api/screen). UUID bytes are
- * listed LSB-first, as BLE_UUID128_INIT and the on-air format want. */
+ * status characteristic (0003, same fields as /api/status), a screen
+ * characteristic (0004, same JSON as POST /api/screen) and a Wi-Fi
+ * provisioning characteristic (0008, same JSON as GET/POST /api/wifi).
+ * UUID bytes are listed LSB-first, as BLE_UUID128_INIT and the on-air format
+ * want. */
 static const ble_uuid128_t k_ble_svc_uuid =
     BLE_UUID128_INIT(0x51, 0xd9, 0xe0, 0xc6, 0xa1, 0x38, 0xf4, 0xb2,
                      0x8e, 0x4c, 0x9b, 0x7a, 0x01, 0x00, 0x40, 0x5d);
@@ -62,8 +67,23 @@ static const ble_uuid128_t k_ble_ota_data_uuid =
 static const ble_uuid128_t k_ble_hid_uuid =
     BLE_UUID128_INIT(0x51, 0xd9, 0xe0, 0xc6, 0xa1, 0x38, 0xf4, 0xb2,
                      0x8e, 0x4c, 0x9b, 0x7a, 0x07, 0x00, 0x40, 0x5d);
+static const ble_uuid128_t k_ble_wifi_uuid =
+    BLE_UUID128_INIT(0x51, 0xd9, 0xe0, 0xc6, 0xa1, 0x38, 0xf4, 0xb2,
+                     0x8e, 0x4c, 0x9b, 0x7a, 0x08, 0x00, 0x40, 0x5d);
 
 static uint8_t s_ble_addr_type;
+
+/* The rest of this profile is open on purpose (a demo lamp anyone in range can
+ * drive). Wi-Fi credentials are not that harmless, so the write side can be
+ * gated on an encrypted link: with CONFIG_WIFI_LED_BLE_PROV_ENCRYPT the client
+ * must be paired/bonded first, and NimBLE starts the security procedure when an
+ * unauthenticated write arrives. Off by default because an unbonded phone then
+ * simply fails the write -- see docs/wifi_provisioning.md. */
+#if CONFIG_WIFI_LED_BLE_PROV_ENCRYPT
+#define WIFI_CHR_FLAGS (BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC)
+#else
+#define WIFI_CHR_FLAGS (BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE)
+#endif
 
 /* JSON number with clamped range, for fields like usage/modifier/size. */
 static long json_long(const cJSON *item)
@@ -85,7 +105,7 @@ static int ble_gatt_access(uint16_t conn_handle, uint16_t attr_handle,
                            struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
     /* arg names the characteristic: 2 = LED, 3 = status, 4 = screen,
-     * 5 = OTA control, 6 = OTA data, 7 = HID. */
+     * 5 = OTA control, 6 = OTA data, 7 = HID, 8 = Wi-Fi provisioning. */
     if ((uintptr_t)arg == 2) {
         if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
             char buf[256] = {0};
@@ -282,6 +302,47 @@ static int ble_gatt_access(uint16_t conn_handle, uint16_t attr_handle,
         return 0;
     }
 
+    if ((uintptr_t)arg == 8) {
+        /* Wi-Fi provisioning: same JSON as GET/POST /api/wifi. A 512-byte ATT
+         * payload covers a 32-byte SSID plus a 64-byte passphrase with room for
+         * JSON escaping; anything longer is a malformed command, not a truncation
+         * risk, because the store rejects over-length values anyway. */
+        if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+            char *json = net_config_status_json();
+            if (!json) {
+                return BLE_ATT_ERR_INSUFFICIENT_RES;
+            }
+            int rc = os_mbuf_append(ctxt->om, json, strlen(json));
+            free(json);
+            return rc;
+        }
+        if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
+            return BLE_ATT_ERR_WRITE_NOT_PERMITTED;
+        }
+        char buf[512] = {0};
+        if (OS_MBUF_PKTLEN(ctxt->om) >= sizeof(buf)) {
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        if (ble_hs_mbuf_to_flat(ctxt->om, buf, sizeof(buf) - 1, NULL) != 0) {
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+        cJSON *body = cJSON_Parse(buf);
+        if (!body) {
+            ESP_LOGW(TAG, "BLE wifi write rejected: bad JSON");
+            return 0x81; /* application error: invalid command JSON */
+        }
+        const char *what = "(none)";
+        const char *why = "rejected";
+        bool ok = net_config_apply(body, &what, &why);
+        cJSON_Delete(body);
+        if (!ok) {
+            ESP_LOGW(TAG, "BLE wifi write failed: %s: %s", what, why ? why : "?");
+            return 0x81; /* application error: command rejected */
+        }
+        ESP_LOGI(TAG, "BLE wifi command <- %s", what);
+        return 0;
+    }
+
     return BLE_ATT_ERR_UNLIKELY;
 }
 
@@ -328,6 +389,12 @@ static const struct ble_gatt_svc_def k_ble_gatt_svcs[] = {
                 .access_cb = ble_gatt_access,
                 .arg = (void *)7,
                 .flags = BLE_GATT_CHR_F_WRITE,
+            },
+            {
+                .uuid = &k_ble_wifi_uuid.u,
+                .access_cb = ble_gatt_access,
+                .arg = (void *)8,
+                .flags = WIFI_CHR_FLAGS,
             },
             { 0 }, /* no more characteristics in this service */
         },

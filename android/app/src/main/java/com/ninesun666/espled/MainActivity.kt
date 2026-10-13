@@ -14,10 +14,12 @@ import android.os.Build
 import android.os.Bundle
 import android.os.ParcelUuid
 import android.view.View
+import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
 import com.ninesun666.espled.ble.LedManager
 import com.ninesun666.espled.databinding.ActivityMainBinding
@@ -30,12 +32,21 @@ import org.json.JSONObject
 
 class MainActivity : AppCompatActivity(), LedManager.Listener {
 
+    /** 扫描结果的一行，下拉框显示顺序与这里一致。 */
+    private data class WifiNetwork(val ssid: String, val rssi: Int, val auth: String)
+
     private lateinit var binding: ActivityMainBinding
     private var adapter: BluetoothAdapter? = null
     private val manager by lazy { LedManager(this) }
     private var scanning = false
     private var ready = false
     private var pollJob: Job? = null
+    private var wifiPollJob: Job? = null
+    private var wifiNetworks: List<WifiNetwork> = emptyList()
+
+    /** 板子扫描期间为 false，onWifiConfig 拿到 done/error 就置回 true，轮询协程据此收工。 */
+    @Volatile
+    private var scanSettled = true
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -120,8 +131,15 @@ class MainActivity : AppCompatActivity(), LedManager.Listener {
             val text = binding.hidText.text?.toString().orEmpty().trim()
             if (text.isNotEmpty()) sendHid(JSONObject().put("type", "text").put("text", text).toString())
         }
+        binding.btnWifiScan.setOnClickListener { startWifiScan() }
+        binding.btnWifiApply.setOnClickListener { applyWifiConfig() }
+        binding.btnWifiForget.setOnClickListener { forgetWifiNetwork() }
+        binding.menuWifiNetwork.setOnItemClickListener { _, _, position, _ ->
+            wifiNetworks.getOrNull(position)?.let { binding.etWifiSsid.setText(it.ssid) }
+        }
         updatePreview()
         setControlsEnabled(false)
+        binding.cardWifi.isVisible = false
 
         AutoUpdater.onLaunch(this)
         handleInstallIntent(intent)
@@ -202,6 +220,141 @@ class MainActivity : AppCompatActivity(), LedManager.Listener {
             if (!ok) toast(if (manager.isHidAvailable()) R.string.toast_write_failed
                            else R.string.hid_unavailable)
         }
+    }
+
+    /* ---- Wi-Fi 配网 -------------------------------------------------------
+     * 三个动作都走同一条特征值（0008），命令与 POST /api/wifi 完全一致，
+     * 见 docs/wifi_provisioning.md。扫描是板子侧的异步操作：写 {"cmd":"scan"}
+     * 只是发起，结果靠反复读同一条特征值拿，所以这里要轮询而不是等回调。 */
+
+    private fun startWifiScan() {
+        binding.btnWifiScan.isEnabled = false
+        binding.wifiResult.setText(R.string.wifi_scanning)
+        manager.writeWifi("""{"cmd":"scan"}""") { ok ->
+            runOnUiThread {
+                if (!ok) {
+                    binding.btnWifiScan.isEnabled = true
+                    binding.wifiResult.setText(R.string.wifi_scan_failed)
+                    return@runOnUiThread
+                }
+                pollWifiConfig()
+            }
+        }
+    }
+
+    /** 每 1.5 s 读一次配置，直到扫描落到 done/error，最多 15 s。 */
+    private fun pollWifiConfig() {
+        wifiPollJob?.cancel()
+        scanSettled = false
+        wifiPollJob = lifecycleScope.launch {
+            var waited = 0
+            while (!scanSettled && waited < WIFI_SCAN_TIMEOUT_MS) {
+                delay(1500)
+                waited += 1500
+                manager.readWifiConfig()
+            }
+            runOnUiThread {
+                binding.btnWifiScan.isEnabled = ready
+                if (!scanSettled) binding.wifiResult.setText(R.string.wifi_scan_timeout)
+            }
+        }
+    }
+
+    private fun applyWifiConfig() {
+        val ssid = binding.etWifiSsid.text?.toString().orEmpty().trim()
+        if (ssid.isEmpty()) {
+            binding.wifiResult.setText(R.string.wifi_missing_ssid)
+            return
+        }
+        val pass = binding.etWifiPass.text?.toString().orEmpty()
+        val json = JSONObject()
+            .put("cmd", "set")
+            .put("ssid", ssid)
+            .put("password", pass)
+            .toString()
+        manager.writeWifi(json) { ok ->
+            runOnUiThread {
+                binding.wifiResult.setText(
+                    if (ok) R.string.wifi_applied else R.string.wifi_write_failed)
+                if (ok) {
+                    // 密码交给板子就立刻从输入框清掉：转屏时系统会保存 EditText
+                    // 的内容，别让凭据留在内存里多活一轮。
+                    binding.etWifiPass.setText("")
+                    manager.readWifiConfig()
+                    manager.readStatus()
+                }
+            }
+        }
+    }
+
+    private fun forgetWifiNetwork() {
+        manager.writeWifi("""{"cmd":"forget"}""") { ok ->
+            runOnUiThread {
+                binding.wifiResult.setText(
+                    if (ok) R.string.wifi_forgotten else R.string.wifi_write_failed)
+                if (ok) manager.readWifiConfig()
+            }
+        }
+    }
+
+    override fun onWifiConfig(json: String) {
+        runOnUiThread { renderWifiConfig(json) }
+    }
+
+    private fun renderWifiConfig(json: String) {
+        val o = try {
+            JSONObject(json)
+        } catch (e: Exception) {
+            binding.wifiCurrent.text = json
+            return
+        }
+
+        val ssid = o.optString("ssid")
+        binding.wifiCurrent.text = if (ssid.isEmpty()) {
+            getString(R.string.wifi_current_none)
+        } else {
+            getString(R.string.wifi_current_fmt, ssid,
+                      wifiSourceLabel(o.optString("source")), o.optString("state"))
+        }
+
+        when (o.optString("scan")) {
+            "running" -> Unit
+            "done" -> {
+                scanSettled = true
+                val nets = o.optJSONArray("networks") ?: JSONArray()
+                wifiNetworks = buildList {
+                    for (i in 0 until nets.length()) {
+                        val n = nets.optJSONObject(i) ?: continue
+                        add(WifiNetwork(n.optString("ssid"), n.optInt("rssi"),
+                                        n.optString("auth")))
+                    }
+                }
+                val labels = wifiNetworks.map {
+                    getString(R.string.wifi_scan_item_fmt, it.ssid, it.rssi, it.auth)
+                }.toTypedArray()
+                // 运行时这个 view 是 Material 自动替换出来的 MaterialAutoCompleteTextView
+                // （点输入框直接展开全部候选），但 ViewBinding 的静态类型是
+                // AutoCompleteTextView，所以只用它的 setAdapter，不碰 setSimpleItems。
+                binding.menuWifiNetwork.setAdapter(
+                    ArrayAdapter(this, android.R.layout.simple_list_item_1, labels)
+                )
+                if (wifiNetworks.isEmpty()) binding.wifiResult.setText(R.string.wifi_scan_empty)
+                binding.btnWifiScan.isEnabled = ready
+            }
+            "error" -> {
+                scanSettled = true
+                binding.wifiResult.text =
+                    getString(R.string.wifi_scan_failed_fmt, o.optString("scan_error"))
+                binding.btnWifiScan.isEnabled = ready
+            }
+            else -> scanSettled = true
+        }
+    }
+
+    private fun wifiSourceLabel(source: String) = when (source) {
+        "stored" -> getString(R.string.wifi_source_stored)
+        "build" -> getString(R.string.wifi_source_build)
+        else -> source
     }
 
     private fun checkForUpdate() {
@@ -324,12 +477,15 @@ class MainActivity : AppCompatActivity(), LedManager.Listener {
             binding.btnEmoteSleep, binding.btnFill, binding.btnBars,
             binding.btnHidPlay, binding.btnHidPrev, binding.btnHidNext,
             binding.btnHidMute, binding.btnHidVolUp, binding.btnHidVolDown,
-            binding.btnHidLock, binding.btnHidSend
+            binding.btnHidLock, binding.btnHidSend,
+            binding.btnWifiScan, binding.btnWifiApply, binding.btnWifiForget,
+            binding.etWifiSsid, binding.etWifiPass, binding.menuWifiNetwork
         ).forEach { it.isEnabled = enabled }
         binding.hidText.isEnabled = enabled
         binding.cardControls.alpha = if (enabled) 1f else 0.4f
         binding.cardScreen.alpha = if (enabled) 1f else 0.4f
         binding.cardHid.alpha = if (enabled) 1f else 0.4f
+        binding.cardWifi.alpha = if (enabled) 1f else 0.4f
     }
 
     private fun startPolling() {
@@ -348,9 +504,15 @@ class MainActivity : AppCompatActivity(), LedManager.Listener {
         runOnUiThread {
             setControlsEnabled(true)
             setButtonState()
+            // 老固件没有 0008：卡片整张藏掉，比放着让按钮全死更清楚。
+            binding.cardWifi.isVisible = manager.isWifiAvailable()
+            if (!manager.isWifiAvailable()) {
+                binding.wifiResult.setText(R.string.wifi_unsupported)
+            }
         }
         manager.readLedCtl()
         manager.readStatus()
+        if (manager.isWifiAvailable()) manager.readWifiConfig()
         startPolling()
     }
 
@@ -371,6 +533,8 @@ class MainActivity : AppCompatActivity(), LedManager.Listener {
     override fun onLedDisconnected() {
         ready = false
         pollJob?.cancel()
+        wifiPollJob?.cancel()
+        scanSettled = true
         runOnUiThread {
             setControlsEnabled(false)
             setButtonState()
@@ -410,5 +574,10 @@ class MainActivity : AppCompatActivity(), LedManager.Listener {
 
     private fun toast(res: Int) {
         Toast.makeText(this, res, Toast.LENGTH_SHORT).show()
+    }
+
+    private companion object {
+        /** 板子一次全信道扫描最长十几秒，超过就当成没等到，让用户重试。 */
+        const val WIFI_SCAN_TIMEOUT_MS = 15000
     }
 }

@@ -8,12 +8,13 @@
 | [`ROADMAP.md`](ROADMAP.md) | **目标、路线、已定的决策、踩过的坑** —— 接手先读这份 |
 | [`wifi_led/`](wifi_led/README.md) | 主项目：Wi-Fi 状态灯 + HTTP 监控页 + 网页/BLE 接管灯带（拆成组件，可当新项目的底座） |
 | `idf_run.ps1` | Windows + Git Bash 下唯一能跑通 `idf.py` 的入口 |
-| `board_api.py` | 按 `Content-Length` 读的 HTTP 探针（板子的 API 发完不关连接，裸 curl 会假死） |
+| `board_api.py` | 按 `Content-Length` 读的 HTTP 探针（板子的 API 发完不关连接，裸 curl 会假死）；`wifi` 子命令读/换/忘掉网络，**命令行里的密码会进 shell history** |
 | `capture_boot.py` | 复位板子并抓开机日志（这块板的复位配方写在文件头注释里） |
 | `emote_stress.py` | 刷屏 API 交替压测 —— 三色条/纯色/表情混打，兼作死锁回归 |
 | `emote_soak.py` | 复位后让表情连续跑 N 秒，同时盯串口有没有报错 |
 | `check_page_js.py` | 把编译进固件的页面 JS 抽出来 `node --check`（JS 语法错误不会让任何 API 报错） |
-| [`tools/ble_gatt_test.py`](tools/ble_gatt_test.py) | BLE 回归测试（bleak 直连开发板，7 项检查；用法见脚本头部） |
+| [`tools/ble_gatt_test.py`](tools/ble_gatt_test.py) | BLE 回归测试（bleak 直连开发板，11 项检查，含配网特征值；用法见脚本头部） |
+| [`docs/wifi_provisioning.md`](docs/wifi_provisioning.md) | 运行时换网的协议单一来源（scan/set/forget、凭据优先级、安全边界、验收步骤） |
 | [`docs/`](docs/README.md) | 乐鑫官方手册（芯片规格书 v2.2、WROOM-1 模组手册、TRM，中文 PDF） |
 | [`docs/battery_wiring.svg`](docs/battery_wiring.svg) | 锂电池供电 / 充电 / 电量采样接线图（方案已定，**线还没接**） |
 
@@ -39,6 +40,9 @@
    cp sdkconfig.local.example sdkconfig.local
    # 编辑 sdkconfig.local，填你自己路由器的 SSID 和密码
    ```
+
+   留着 `CHANGE_ME` 不填也能烧：固件会空等配网，用 App 或 `board_api.py wifi set` 把网络写进 NVS
+   就上线了（`CHANGE_ME` 和空串都算"没配"，不会去连这个不存在的 SSID）。
 
 4. 激活环境后编译烧录：
 

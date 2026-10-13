@@ -12,6 +12,10 @@ exactly the announced number of bytes.
   python board_api.py led 230 160 20               # take over: solid rgb(230,160,20)
   python board_api.py led rainbow 255 80 0 60      # take over: fx colour brightness
   python board_api.py led auto                     # hand the strip back to link state
+  python board_api.py wifi                         # 当前网络配置 + 最近一次扫描结果
+  python board_api.py wifi scan                    # 让板子扫描周围网络（再跑一次 wifi 看结果）
+  python board_api.py wifi set "MyRouter" "pass"   # 换网络：存进 NVS 并立刻重连
+  python board_api.py wifi forget                  # 清掉保存的网络，回到编译期配置
 """
 import json
 import socket
@@ -76,6 +80,30 @@ def main():
         else:
             r, g, b = (int(x) for x in args[1:4])
             print(call("POST", "/api/screen", json.dumps({"r": r, "g": g, "b": b})))
+    elif what == "wifi":
+        # 配网验证走 PC 一侧的通道，协议与手机 App 的 BLE 特征值完全相同
+        # （docs/wifi_provisioning.md）。密码出现在命令行里会进 shell 历史，
+        # 所以这条路只用来做一次性验证，日常配网用 App。
+        if len(args) == 1 or args[1] == "get":
+            status, body = call("GET", "/api/wifi")
+            print(status)
+            print(json.dumps(json.loads(body), ensure_ascii=False, indent=2))
+        elif args[1] == "scan":
+            print(call("POST", "/api/wifi", json.dumps({"cmd": "scan"})))
+        elif args[1] == "forget":
+            status, body = call("POST", "/api/wifi", json.dumps({"cmd": "forget"}))
+            print(status)
+            print(body)
+        elif args[1] == "set":
+            ssid = args[2]
+            pwd = args[3] if len(args) > 3 else ""
+            status, body = call("POST", "/api/wifi",
+                                json.dumps({"cmd": "set", "ssid": ssid, "password": pwd}))
+            print(status)
+            print(body)
+        else:
+            print(__doc__)
+            sys.exit(2)
     else:
         print(__doc__)
         sys.exit(2)

@@ -21,6 +21,29 @@
 | 外接屏 + 表情 | ST7789 240×240 已点亮（8 根线全接），`esp_emote` 20 张表情从 `anim_icon` 分区跑通（2026-10-11）。**只剩屏上的肉眼确认** |
 | 发布 | 已推到 GitHub 私有仓库，不含任何真实凭据 |
 
+## 运行时换网（配网）：固件与 App 已落地，**还没上板**（2026-10-14）
+
+需求是"换路由器 / 改密码不用重新烧固件"，而且**手机 App 能直接配**——原来 SSID/密码只有
+`sdkconfig.local` 一条路，凭据等于硬编码在编译产物里。
+
+已定的方案（协议细节以 `docs/wifi_provisioning.md` 为准，那里是单一来源）：
+
+- 凭据进 **NVS**（namespace `wifi`），优先级 NVS > `sdkconfig.local` > 没配；
+  编译期那一层**故意留着**当恢复手段，重新烧录永远能救回来。
+- 传输走 **BLE 特征值 `…0008` + `/api/wifi`**，两端共用 `components/net_config/` 一份实现。
+  不用 ESP-IDF 官方 `wifi_provisioning`：它是 SRP/security 1/2 那套自定义 GATT profile，
+  和本仓库已有的 `5d4000…` profile 不是一回事，接进来要并存两套服务。
+- **不做板子自己的热点配网页**：第 1 条坑已经证明这板的 AP 会让连上它的电脑断网，
+  手机一连去配网就失去互联网，体验上是"配个网先把网拆了"。BLE 不依赖 Wi-Fi，网络全错也能配。
+- 换网用 `BIT_REJOIN` 事件位让 `connect_task` 自己断开重连，认证模式梯队 `k_attempts[]` 不动；
+  没配任何网络时它每 5 s 空转提示一次，不是死循环。
+- 密码只存在于 `wifi_creds` 组件内部，任何回复/日志都不含它（`ble_gatt_test.py` 现在会断言这点）。
+
+上板要验的六步写在 `docs/wifi_provisioning.md` 末尾。本机只验证到 **ESP-IDF v5.3.5 全量编译
+（`-Wall -Werror`）通过，含 `WIFI_LED_BLE_PROV_ENCRYPT=y` 那条分支**；NVS 掉电保持、真实重连、
+关联状态下发起扫描、手机 App 的整个流程都**未验证**。App 这边连编译都没跑过——这台机器没有
+Android SDK。
+
 ## 接力第一步：把新固件烧进去 —— 已完成（2026-10-08 00:40）
 
 结论先说：**之前那次"烧录成功"是假的**，板子跑的一直是重构前的镜像。成因不是编译，
@@ -240,13 +263,24 @@ curl -X POST -H "Content-Type: application/json" \
     正确写法 `res.ok?(hold>0?a:b):c`。防线：`python check_page_js.py`（从 `web_index.h` 抽出
     `<script>` 交给 `node --check`），改过页面就跑它；最终验收要用浏览器看渲染结果，不是看接口返回码。
 
+13. **`esp_wifi_scan_start(sync=true)` 同一时刻只能有一个在跑**。连接阶梯每轮尝试自己会
+    扫描一次，配网的"列出附近网络"也扫——两个都直接调就撞。现在 `prov_scan_task` 跑在自己的
+    任务里，和阶梯之间一把互斥锁串行化。加"顺便扫一下"的功能时别再开第三个调用点。
+14. **空仓库直接 build 会失败，不是代码问题**：`CMakeLists.txt` 里
+    `set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.local")` 写死了本地凭据文件，
+    新克隆的机器上没这份 → `SDKCONFIG_DEFAULTS '…sdkconfig.local' does not exist`。
+    按 README 先 `cp sdkconfig.local.example sdkconfig.local`（占位符就够编译用），
+    再 `rm -f sdkconfig`。
+
 ## 结构约定（本次改造立的，后续照这个长）
 
 ```
 wifi_led/
   main/              只做接线：app_main.c 20 行 + Kconfig.projbuild；表情资源 bin 的 CMake 挂钩也在这层的 CMakeLists
   components/
-    link_state/      Wi-Fi 上线、安全模式重试阶梯、外网探测、状态发布
+    link_state/      Wi-Fi 上线、安全模式重试阶梯、外网探测、状态发布；运行中换网（BIT_REJOIN）+ 配网扫描
+    wifi_creds/      凭据唯一存放处：NVS 读写 + 校验 + 与编译期默认值的优先级
+    net_config/      配网协议（scan/set/forget + 状态回读），BLE 0008 与 /api/wifi 共用
     status_light/    WS2812 渲染 + 手动覆盖接口
     display_tft/     ST7789 240x240 SPI 屏（IDF 内置 esp_lcd 面板驱动）+ esp_emote 表情渲染 + /api/screen 后端
     i2c_probe/       总线扫描，认外接模块用；默认编译关闭

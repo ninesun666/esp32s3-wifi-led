@@ -63,6 +63,9 @@ IDF 共存层自动处理，零配置）。广播名 `ESP32-LED`，改 `main/Kco
 | `…0002` LED | 读 / 写 | 与 `/api/led` 同款 JSON |
 | `…0003` 状态 | 只读 | 与 `/api/status` 同字段，去掉热点客户端列表 |
 
+改网络的 `…0008` 和屏 / OTA / HID 的特征值见 `components/ble_gatt/ble_gatt.c`；
+0008 的读写载荷就是 `/api/wifi` 的那套 JSON，协议定义在 `docs/wifi_provisioning.md`。
+
 写 `{"manual":true,"fx":"rainbow","rgb":[255,80,0],"brightness":60}` 到 0002，灯带立刻
 变彩虹，读回当前生效设定；写非法值（如 `{"fx":"disco"}`）收到应用层错误 0x81。
 读 0003 拿到 `{"state":"online","ssid":"…","ip":"…","rssi":…,…}` 现取现算。
@@ -74,6 +77,9 @@ BLE 和网页共用同一条 `status_light_ctl_from_json()` / `monitor_server_st
   自动走 BLE 长读，NimBLE 服务器自己处理，客户端不用做任何事。
 - 特征值明文、不配对：射频范围内任何人都能控灯——演示用途的取舍；
   以后要加密，给特征值加 `BLE_GATT_CHR_F_WRITE_ENC` 是小改。
+- **只有配网特征值做了这个"小改"**：`WIFI_LED_BLE_PROV_ENCRYPT=y` 后 0008 要求配对链路，
+  其它特征值不变。默认关，因为当前手机 App 还没有配对流程——开着它就连不上配网，
+  取舍写进 `docs/wifi_provisioning.md` 的安全边界一节。
 - 回归测试不用手机：仓库根目录建一次 venv 后直跑——
   `python3 -m venv tools/.venv && tools/.venv/bin/pip install bleak`，
   以后 `tools/.venv/bin/python tools/ble_gatt_test.py`（完整用法在脚本头部）。
@@ -99,6 +105,10 @@ BLE 和网页共用同一条 `status_light_ctl_from_json()` / `monitor_server_st
   `WIFI_LED_TFT_IDLE_EMOTE_SEC`（默认 180 s）没有再动屏，固件自动切到
   `WIFI_LED_TFT_IDLE_EMOTE_NAME`（默认 `sleepy`）——填色画面也会被它顶掉；纯灯控不重置计时。
   屏没起来时回 `{"ok":false,"error":"panel not ready"}`。
+- `/api/wifi` —— `GET` 读当前网络（来源 `stored / build / none`、SSID、连接状态、最近一次配网扫描结果），
+  `POST` 换网：`{"cmd":"scan"}` / `{"cmd":"set","ssid":"…","password":"…"}` / `{"cmd":"forget"}`。
+  凭据进 NVS，运行中重连，不用重新烧录；协议和校验上限以 `docs/wifi_provisioning.md` 为准。
+  **回复和日志里都不会出现密码**，但这条接口同样无鉴权，只在局域网内用。
 - mDNS —— 板子应答 `http://<WIFI_LED_MDNS_HOSTNAME>.local/`（默认 `esp32-monitor`），
   不用记住 DHCP 地址。个别 Windows 解析不了 `.local`，退回 IP 即可。
 - `i2c` 字段 / 页面"I2C 总线"卡片 —— `i2c_probe` 组件在 GPIO 8(SDA)/9(SCL) 上扫 0x08–0x77，
@@ -115,7 +125,9 @@ BLE 和网页共用同一条 `status_light_ctl_from_json()` / `monitor_server_st
 ```
 main/                 app_main.c 只做接线：link_state_init / status_light_start / display_tft_start / monitor_server_start / ble_gatt_start
 components/
-  link_state/         Wi-Fi 上线、安全模式重试阶梯、外网探测、状态与 IP 发布
+  link_state/         Wi-Fi 上线、安全模式重试阶梯、外网探测、状态与 IP 发布；也管运行中换网（BIT_REJOIN）和配网扫描
+  wifi_creds/         Wi-Fi 凭据的唯一存放处：NVS 读写 + 校验 + 与编译期默认值的优先级
+  net_config/         配网协议（scan / set / forget + 状态回读），BLE 0008 和 /api/wifi 共用这一份
   status_light/       WS2812 渲染 + 灯带接管设定（依赖 espressif/led_strip）
   display_tft/        ST7789 240x240 SPI 屏，走 IDF 内置 esp_lcd 面板驱动 + SPI2；表情渲染也在这里
   i2c_probe/          I2C 总线看门狗，识别外接模块是否应答（用 IDF 自带 esp_driver_i2c，默认关）
@@ -293,9 +305,15 @@ python check_page_js.py                   # 编译进固件的页面 JS 语法�
 | 文件 | 内容 | 是否提交 |
 | --- | --- | --- |
 | `sdkconfig.defaults` | 硬件相关：16 MiB flash、Octal PSRAM、自定义分区表、灯脚 | 是 |
-| `sdkconfig.local` | 路由器 SSID + 密码 | **否**（gitignore） |
+| `sdkconfig.local` | 路由器 SSID + 密码 = **烧录时的兜底凭据** | **否**（gitignore） |
 | `sdkconfig.local.example` | 上面那份的模板 | 是 |
 | `sdkconfig` | 编译时真正生效的合并结果 | 否（gitignore） |
+
+凭据的优先级是 **NVS 里手机/App 配过的网络 > `sdkconfig.local` 的编译期值 > 谁都没配**。
+`CHANGE_ME` 和空串算"没配"，所以拿模板直接编译的固件不会去连一个叫 CHANGE_ME 的网络。
+留着编译期这一层是有意的：NVS 写坏了、或者换了一块空白 flash，重新烧录仍是恢复手段；
+一旦 App 配过网，`sdkconfig.local` 里的值就被盖过去，改 defaults 不会再影响板子。
+运行时换网走 BLE 特征值 0008 或 `/api/wifi`，接口和状态回读见 `docs/wifi_provisioning.md`。
 
 两份 defaults 的合并由 `CMakeLists.txt` 里 `project()` 之前的
 `set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.local")` 完成。

@@ -14,9 +14,10 @@ import java.util.UUID
  * Mirrors the Nordic Blinky sample structure: a BleManager subclass owns the
  * GATT profile, exposes typed operations, and reports readiness through a
  * ConnectionObserver. Protocol is the ESP32-LED profile from the firmware's
- * ble_gatt component: one custom service with a read/write LED characteristic
- * and a read-only status characteristic, both carrying the same JSON as the
- * board's HTTP API.
+ * ble_gatt component: one custom service with a read/write LED characteristic,
+ * a read-only status characteristic, write-only screen and HID characteristics,
+ * and a read/write Wi-Fi provisioning characteristic — the LED, status and
+ * Wi-Fi ones carry the same JSON as the board's HTTP API.
  */
 class LedManager(context: Context) : BleManager(context) {
 
@@ -24,6 +25,7 @@ class LedManager(context: Context) : BleManager(context) {
         fun onLedReady()
         fun onLedStatus(json: String)
         fun onLedCtl(json: String)
+        fun onWifiConfig(json: String)
         fun onLedDisconnected()
     }
 
@@ -32,6 +34,7 @@ class LedManager(context: Context) : BleManager(context) {
     private var ledChar: BluetoothGattCharacteristic? = null
     private var statusChar: BluetoothGattCharacteristic? = null
     private var screenChar: BluetoothGattCharacteristic? = null
+    private var wifiChar: BluetoothGattCharacteristic? = null
     private var hidChar: BluetoothGattCharacteristic? = null
 
     init {
@@ -63,6 +66,8 @@ class LedManager(context: Context) : BleManager(context) {
         screenChar = service.getCharacteristic(SCREEN_CHAR_UUID)
         // Optional: only present from the OTA/HID firmware generation onward.
         hidChar = service.getCharacteristic(HID_CHAR_UUID)
+        // Optional: Wi-Fi provisioning arrived with the dynamic-credential firmware.
+        wifiChar = service.getCharacteristic(WIFI_CHAR_UUID)
         val writable = ledChar?.let {
             (it.properties and BluetoothGattCharacteristic.PROPERTY_WRITE) != 0
         } ?: false
@@ -79,6 +84,7 @@ class LedManager(context: Context) : BleManager(context) {
         statusChar = null
         screenChar = null
         hidChar = null
+        wifiChar = null
     }
 
     fun writeLed(json: String, onResult: (Boolean) -> Unit) {
@@ -140,6 +146,44 @@ class LedManager(context: Context) : BleManager(context) {
 
     fun isHidAvailable(): Boolean = hidChar != null
 
+    fun isWifiAvailable(): Boolean = wifiChar != null
+
+    /**
+     * One provisioning command: {"cmd":"scan"} / {"cmd":"set","ssid":…,"password":…}
+     * / {"cmd":"forget"}. A false result means the board refused it (bad JSON,
+     * over-long SSID or passphrase, a scan already running) or the link died.
+     */
+    fun writeWifi(json: String, onResult: (Boolean) -> Unit) {
+        val characteristic = wifiChar
+        if (characteristic == null) {
+            onResult(false)
+            return
+        }
+        writeCharacteristic(
+            characteristic,
+            json.toByteArray(Charsets.UTF_8),
+            BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+        )
+            .done { onResult(true) }
+            .fail { _, status ->
+                Log.w(TAG, "wifi write failed: status=$status")
+                onResult(false)
+            }
+            .enqueue()
+    }
+
+    /** Reads the config + last scan; delivered through [Listener.onWifiConfig]. */
+    @SuppressLint("MissingPermission")
+    fun readWifiConfig() {
+        val characteristic = wifiChar ?: return
+        readCharacteristic(characteristic)
+            .with { _, data ->
+                data.value?.let { listener?.onWifiConfig(String(it, Charsets.UTF_8)) }
+            }
+            .fail { _, status -> Log.w(TAG, "wifi config read failed: status=$status") }
+            .enqueue()
+    }
+
     @SuppressLint("MissingPermission")
     fun readLedCtl() {
         val characteristic = ledChar ?: return
@@ -166,5 +210,6 @@ class LedManager(context: Context) : BleManager(context) {
         val STATUS_CHAR_UUID: UUID = UUID.fromString("5d400003-7a9b-4c8e-b2f4-38a1c6e0d951")
         val SCREEN_CHAR_UUID: UUID = UUID.fromString("5d400004-7a9b-4c8e-b2f4-38a1c6e0d951")
         val HID_CHAR_UUID: UUID = UUID.fromString("5d400007-7a9b-4c8e-b2f4-38a1c6e0d951")
+        val WIFI_CHAR_UUID: UUID = UUID.fromString("5d400008-7a9b-4c8e-b2f4-38a1c6e0d951")
     }
 }

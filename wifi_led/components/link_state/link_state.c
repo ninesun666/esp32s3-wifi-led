@@ -1,10 +1,11 @@
 /*
- * Link state: Wi-Fi bring-up, association with a security-ladder retry, and an
- * internet reachability probe. Publishes one of three states that the status
- * light and the web monitor both read.
+ * Link state: Wi-Fi bring-up, association with a security-ladder retry, an
+ * internet reachability probe, and the two hooks provisioning needs: a scan a
+ * phone can read, and a way to switch networks without reflashing.
  *
- * The probe and the connect ladder run in their own tasks because both block:
- * esp_wifi_scan_start(sync) for seconds, and a TCP connect has to be waited on.
+ * The probe, the connect ladder and the provisioning scan run in their own
+ * tasks because all three block: esp_wifi_scan_start(sync) takes seconds, and a
+ * TCP connect has to be waited on.
  */
 
 #include <stdio.h>
@@ -12,6 +13,7 @@
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "freertos/event_groups.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
@@ -21,6 +23,7 @@
 #include "esp_heap_caps.h"
 #include "nvs_flash.h"
 #include "link_state.h"
+#include "wifi_creds.h"
 #include "lwip/sockets.h"
 
 static const char *TAG = "link_state";
@@ -28,6 +31,7 @@ static const char *TAG = "link_state";
 #define BIT_STA_STARTED BIT0
 #define BIT_GOT_IP      BIT1
 #define BIT_LOST_IP     BIT2
+#define BIT_REJOIN      BIT3
 
 /* 114.114.114.114:53 rather than a hostname, so the probe measures raw internet
  * reachability and cannot be masked by a broken local DNS server. */
@@ -49,6 +53,23 @@ static volatile bool s_got_ip = false;
 static volatile bool s_online = false;
 static char s_ip_str[16] = "0.0.0.0";
 static EventGroupHandle_t s_wifi_events;
+
+/* Effective target network, reloaded at the top of every ladder pass so a
+ * provisioning write takes effect on the next attempt. The passphrase lives
+ * here in RAM for the same reason the driver keeps it: it has to be handed to
+ * esp_wifi_set_config() again on each retry. */
+static char s_ssid[WIFI_CRED_SSID_MAX + 1];
+static char s_pass[WIFI_CRED_PASS_MAX + 1];
+
+/* Provisioning scan: one task, one result buffer, serialized against the
+ * ladder's own pre-connect scan by s_scan_lock. */
+#define PROV_SCAN_MAX 8
+static TaskHandle_t s_prov_task;
+static SemaphoreHandle_t s_scan_lock;
+static volatile link_scan_phase_t s_scan_phase = LINK_SCAN_IDLE;
+static volatile esp_err_t s_scan_err = ESP_OK;
+static link_state_net_t s_scan_nets[PROV_SCAN_MAX];
+static volatile int s_scan_count;
 
 /* An authmode threshold above WPA2 that yields reason 211 proves the AP is not
  * WPA3-class, so the ladder is ordered for a WPA2 router and covers the ways a
@@ -205,16 +226,25 @@ void link_state_ap_ssid(char *out, size_t out_len)
 #endif
 }
 
+void link_state_target_ssid(char *out, size_t out_len)
+{
+    /* The ladder's own copy, which is what it is currently trying to join. */
+    strlcpy(out, s_ssid, out_len);
+}
+
 /* Reports nearby networks and records the target SSID's strongest BSS. Called
  * before every connect attempt, because the authmode/cipher/BSSID fields are what
  * turns an opaque reason 204 into a specific diagnosis, and a serial monitor that
  * joins late still gets them. */
 static void scan_for_target(void)
 {
+    s_target_seen = false;
     wifi_scan_config_t scan = { .show_hidden = true };
     ESP_LOGI(TAG, "scanning...");
+    xSemaphoreTake(s_scan_lock, portMAX_DELAY);
     esp_err_t err = esp_wifi_scan_start(&scan, true);
     if (err != ESP_OK) {
+        xSemaphoreGive(s_scan_lock);
         ESP_LOGW(TAG, "scan failed: %s", esp_err_to_name(err));
         return;
     }
@@ -222,6 +252,7 @@ static void scan_for_target(void)
     uint16_t found = 0;
     esp_wifi_scan_get_ap_num(&found);
     if (found == 0) {
+        xSemaphoreGive(s_scan_lock);
         ESP_LOGW(TAG, "scan found nothing");
         return;
     }
@@ -229,15 +260,16 @@ static void scan_for_target(void)
 
     wifi_ap_record_t *aps = malloc(sizeof(wifi_ap_record_t) * report);
     if (!aps) {
+        xSemaphoreGive(s_scan_lock);
         return;
     }
     esp_wifi_scan_get_ap_records(&report, aps);
+    xSemaphoreGive(s_scan_lock);
 
-    s_target_seen = false;
     int8_t best_rssi = -127;
     int matches = 0;
     for (int i = 0; i < report; i++) {
-        bool is_target = strcmp((const char *)aps[i].ssid, CONFIG_WIFI_LED_WIFI_SSID) == 0;
+        bool is_target = strcmp((const char *)aps[i].ssid, s_ssid) == 0;
         if (is_target) {
             matches++;
             describe_ap(&aps[i], "  >");
@@ -253,18 +285,21 @@ static void scan_for_target(void)
     free(aps);
 
     if (!s_target_seen) {
-        ESP_LOGE(TAG, "target \"%s\" NOT in scan results", CONFIG_WIFI_LED_WIFI_SSID);
+        ESP_LOGE(TAG, "target \"%s\" NOT in scan results", s_ssid);
     } else {
         ESP_LOGI(TAG, "target \"%s\" seen on %d BSS, strongest pinned above",
-                 CONFIG_WIFI_LED_WIFI_SSID, matches);
+                 s_ssid, matches);
     }
 }
 
 static void apply_wifi_config(size_t try_index)
 {
     wifi_config_t c = {0};
-    snprintf((char *)c.sta.ssid, sizeof(c.sta.ssid), "%s", CONFIG_WIFI_LED_WIFI_SSID);
-    snprintf((char *)c.sta.password, sizeof(c.sta.password), "%s", CONFIG_WIFI_LED_WIFI_PASSWORD);
+    /* strlcpy rather than snprintf: the buffers are exactly the driver's field
+     * sizes, and -Wformat-truncation rightly calls a same-size snprintf a
+     * possible truncation. wifi_creds_validate() guarantees the values fit. */
+    strlcpy((char *)c.sta.ssid, s_ssid, sizeof(c.sta.ssid));
+    strlcpy((char *)c.sta.password, s_pass, sizeof(c.sta.password));
     c.sta.threshold.authmode = k_attempts[try_index].threshold;
     /* pmf_cfg.capable is deprecated and ignored by the driver; only `required`
      * has any effect, and leaving it false accepts both PMF and non-PMF APs. */
@@ -313,7 +348,31 @@ static void connect_task(void *arg)
     xEventGroupWaitBits(s_wifi_events, BIT_STA_STARTED, pdTRUE, pdFALSE, portMAX_DELAY);
     size_t try_index = 0;
     while (true) {
+        /* A phone or the web page moved us to a different network. Drop the
+         * current association first, then let the loop pick up the new
+         * credentials on the next pass. */
+        if (xEventGroupGetBits(s_wifi_events) & BIT_REJOIN) {
+            xEventGroupClearBits(s_wifi_events, BIT_REJOIN);
+            ESP_LOGI(TAG, "network configuration changed, re-associating");
+            esp_wifi_disconnect();
+            /* Consume the disconnect event so it cannot be read as a failed
+             * attempt below. When we were not associated nothing arrives and
+             * the timeout is the only cost. */
+            xEventGroupWaitBits(s_wifi_events, BIT_LOST_IP, pdTRUE, pdFALSE,
+                                pdMS_TO_TICKS(3000));
+            try_index = 0;
+        }
+
         xEventGroupClearBits(s_wifi_events, BIT_GOT_IP | BIT_LOST_IP);
+        wifi_creds_load(s_ssid, sizeof(s_ssid), s_pass, sizeof(s_pass));
+        if (s_ssid[0] == '\0') {
+            /* Nothing to join yet: stay reachable over BLE and wait. */
+            s_state = LINK_STATE_CONNECTING;
+            ESP_LOGW(TAG, "no network configured - provision over BLE or POST /api/wifi");
+            vTaskDelay(pdMS_TO_TICKS(5000));
+            continue;
+        }
+
         scan_for_target();
         apply_wifi_config(try_index);
         ESP_LOGI(TAG, "connecting (attempt %u/%u: %s)",
@@ -327,19 +386,147 @@ static void connect_task(void *arg)
         }
 
         EventBits_t bits = xEventGroupWaitBits(
-            s_wifi_events, BIT_GOT_IP | BIT_LOST_IP, pdFALSE, pdFALSE, pdMS_TO_TICKS(20000));
+            s_wifi_events, BIT_GOT_IP | BIT_LOST_IP | BIT_REJOIN,
+            pdFALSE, pdFALSE, pdMS_TO_TICKS(20000));
 
         if (bits & BIT_GOT_IP) {
             try_index = 0;
-            /* Remain in this branch until the link drops; esp_wifi_connect() must
-             * not be called again while associated. */
-            xEventGroupWaitBits(s_wifi_events, BIT_LOST_IP, pdTRUE, pdFALSE, portMAX_DELAY);
-            vTaskDelay(pdMS_TO_TICKS(3000));
-        } else {
+            /* Remain in this branch until the link drops or the network
+             * changes; esp_wifi_connect() must not be called again while
+             * associated. */
+            EventBits_t up = xEventGroupWaitBits(
+                s_wifi_events, BIT_LOST_IP | BIT_REJOIN, pdTRUE, pdFALSE, portMAX_DELAY);
+            if (!(up & BIT_REJOIN)) {
+                vTaskDelay(pdMS_TO_TICKS(3000));
+            }
+        } else if (!(bits & BIT_REJOIN)) {
             try_index = (try_index + 1) % N_ATTEMPTS;
             vTaskDelay(pdMS_TO_TICKS(3000));
         }
     }
+}
+
+/* Blocking scan for the phone's network picker, in its own task so the seconds
+ * it stalls never touch an HTTP or BLE callback. Serialized with the ladder's
+ * own scan by s_scan_lock; a request landing while one is running is refused
+ * rather than queued. */
+static void prov_scan_task(void *arg)
+{
+    while (true) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        wifi_scan_config_t cfg = { .show_hidden = false };
+        xSemaphoreTake(s_scan_lock, portMAX_DELAY);
+        esp_err_t err = esp_wifi_scan_start(&cfg, true);
+        if (err != ESP_OK) {
+            xSemaphoreGive(s_scan_lock);
+            s_scan_err = err;
+            s_scan_phase = LINK_SCAN_ERROR;
+            ESP_LOGW(TAG, "provisioning scan failed: %s", esp_err_to_name(err));
+            continue;
+        }
+
+        uint16_t found = 0;
+        esp_wifi_scan_get_ap_num(&found);
+        uint16_t room = found > PROV_SCAN_MAX * 4 ? PROV_SCAN_MAX * 4 : found;
+        wifi_ap_record_t *aps = malloc(sizeof(wifi_ap_record_t) * (room ? room : 1));
+        if (!aps) {
+            xSemaphoreGive(s_scan_lock);
+            s_scan_err = ESP_ERR_NO_MEM;
+            s_scan_phase = LINK_SCAN_ERROR;
+            continue;
+        }
+        uint16_t got = room;
+        esp_wifi_scan_get_ap_records(&got, aps);
+        xSemaphoreGive(s_scan_lock);
+
+        /* One entry per SSID (mesh and repeaters share a name), kept at the
+         * strongest BSS, then the RSSI-best PROV_SCAN_MAX of them. */
+        int n = 0;
+        for (int i = 0; i < got; i++) {
+            if (aps[i].ssid[0] == '\0') {
+                continue;
+            }
+            int slot = -1;
+            for (int j = 0; j < n; j++) {
+                if (strcmp(s_scan_nets[j].ssid, (const char *)aps[i].ssid) == 0) {
+                    slot = j;
+                    break;
+                }
+            }
+            if (slot < 0) {
+                if (n >= PROV_SCAN_MAX) {
+                    continue;
+                }
+                slot = n++;
+                strlcpy(s_scan_nets[slot].ssid, (const char *)aps[i].ssid,
+                        sizeof(s_scan_nets[slot].ssid));
+                s_scan_nets[slot].rssi = (int)aps[i].rssi;
+                s_scan_nets[slot].auth = link_state_auth_name(aps[i].authmode);
+                continue;
+            }
+            if ((int)aps[i].rssi > s_scan_nets[slot].rssi) {
+                s_scan_nets[slot].rssi = aps[i].rssi;
+                s_scan_nets[slot].auth = link_state_auth_name(aps[i].authmode);
+            }
+        }
+        free(aps);
+
+        for (int i = 0; i < n; i++) {
+            for (int j = i + 1; j < n; j++) {
+                if (s_scan_nets[j].rssi > s_scan_nets[i].rssi) {
+                    link_state_net_t tmp = s_scan_nets[i];
+                    s_scan_nets[i] = s_scan_nets[j];
+                    s_scan_nets[j] = tmp;
+                }
+            }
+        }
+        s_scan_count = n;
+        s_scan_phase = LINK_SCAN_DONE;
+        ESP_LOGI(TAG, "provisioning scan: %d network(s)", n);
+    }
+}
+
+bool link_state_scan_start(void)
+{
+    if (s_scan_phase == LINK_SCAN_RUNNING) {
+        return false;
+    }
+    s_scan_phase = LINK_SCAN_RUNNING;
+    s_scan_err = ESP_OK;
+    xTaskNotifyGive(s_prov_task);
+    return true;
+}
+
+link_scan_phase_t link_state_scan_phase(void)
+{
+    return s_scan_phase;
+}
+
+esp_err_t link_state_scan_error(void)
+{
+    return s_scan_err;
+}
+
+int link_state_scan_results(link_state_net_t *out, int max)
+{
+    if (s_scan_phase != LINK_SCAN_DONE || max <= 0) {
+        return 0;
+    }
+    int n = s_scan_count;
+    if (n > max) {
+        n = max;
+    }
+    if (n > PROV_SCAN_MAX) {
+        n = PROV_SCAN_MAX;
+    }
+    memcpy(out, s_scan_nets, sizeof(*out) * n);
+    return n;
+}
+
+void link_state_apply_new_config(void)
+{
+    xEventGroupSetBits(s_wifi_events, BIT_REJOIN);
 }
 
 static bool probe_internet(void)
@@ -405,8 +592,11 @@ static void report_memory(void)
 
 void link_state_init(void)
 {
-    ESP_LOGI(TAG, "target SSID: \"%s\" (password %u chars)",
-             CONFIG_WIFI_LED_WIFI_SSID, (unsigned)strlen(CONFIG_WIFI_LED_WIFI_PASSWORD));
+    s_scan_lock = xSemaphoreCreateMutex();
+    wifi_creds_load(s_ssid, sizeof(s_ssid), s_pass, sizeof(s_pass));
+    ESP_LOGI(TAG, "target network: \"%s\" (source: %s, passphrase %u chars)",
+             s_ssid[0] ? s_ssid : "(none)", wifi_creds_source(),
+             (unsigned)strlen(s_pass));
 
     report_memory();
 
@@ -444,13 +634,16 @@ void link_state_init(void)
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
 #endif
     ESP_ERROR_CHECK(esp_wifi_start());
-    /* Both require an enabled interface, hence after start(). RAM storage because
-     * every attempt writes a fresh config and a stale credential in NVS would
-     * silently override it; modem sleep can drop EAPOL frames to finicky
-     * routers, so it stays off while this is a diagnostic. */
+    /* RAM storage: the ladder writes a fresh config on every attempt (the
+     * authmode threshold changes each pass), and driver-side NVS persistence
+     * would compete with that. Provisioning keeps its own credentials in the
+     * separate "wifi" NVS namespace, which the driver never reads. Modem sleep
+     * can drop EAPOL frames to finicky routers, so it stays off while this is a
+     * diagnostic. */
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 
     xTaskCreate(probe_task, "probe", 4096, NULL, 5, NULL);
     xTaskCreate(connect_task, "connect", 4096, NULL, 6, NULL);
+    xTaskCreate(prov_scan_task, "provscan", 4096, NULL, 5, &s_prov_task);
 }

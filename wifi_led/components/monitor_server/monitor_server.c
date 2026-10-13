@@ -18,6 +18,7 @@
 #include "cJSON.h"
 #include "mdns.h"
 #include "link_state.h"
+#include "net_config.h"
 #include "status_light.h"
 #include "display_tft.h"
 #include "i2c_probe.h"
@@ -275,6 +276,48 @@ bool monitor_server_screen_apply(const cJSON *body, const char **what_out,
     return ok;
 }
 
+/* GET/POST /api/wifi -- read the Wi-Fi configuration, ask for a network scan,
+ * and point the board at a new access point. Both are thin adapters over
+ * net_config, which is also what the BLE Wi-Fi characteristic (0008) calls, so
+ * the phone and this page cannot disagree about the protocol. The passphrase is
+ * write-only: it goes into NVS and never comes back in a response.
+ *
+ * Reachable from the LAN without credentials, like every other endpoint here --
+ * see docs/wifi_provisioning.md for the trust model and the BLE-only option. */
+static esp_err_t wifi_get_handler(httpd_req_t *req)
+{
+    char *json = net_config_status_json();
+    if (!json) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t err = httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
+    free(json);
+    return err;
+}
+
+static esp_err_t wifi_post_handler(httpd_req_t *req)
+{
+    cJSON *body = read_json_body(req);
+    if (!body) {
+        return ESP_FAIL;
+    }
+
+    const char *what = "(none)";
+    const char *why = "rejected";
+    bool ok = net_config_apply(body, &what, &why);
+    cJSON_Delete(body);
+
+    ESP_LOGI(TAG, "wifi cmd <- %s %s", what, ok ? "accepted" : why);
+    if (!ok) {
+        return send_ok(req, false, why ? why : "rejected");
+    }
+    /* Reply with the fresh state: the caller's next question is always
+     * "did it take", and this saves a round trip. */
+    return wifi_get_handler(req);
+}
+
 static esp_err_t screen_handler(httpd_req_t *req)
 {
     cJSON *body = read_json_body(req);
@@ -403,6 +446,8 @@ void monitor_server_start(void)
         { .uri = "/api/led",    .method = HTTP_GET,  .handler = led_get_handler },
         { .uri = "/api/led",    .method = HTTP_POST, .handler = led_post_handler },
         { .uri = "/api/screen", .method = HTTP_POST, .handler = screen_handler },
+        { .uri = "/api/wifi",   .method = HTTP_GET,  .handler = wifi_get_handler },
+        { .uri = "/api/wifi",   .method = HTTP_POST, .handler = wifi_post_handler },
         { .uri = "/api/ota",    .method = HTTP_POST, .handler = ota_handler },
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
