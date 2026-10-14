@@ -3,6 +3,9 @@
 用一颗 WS2812 把联网状态显示出来，同时在板子上跑一个 HTTP 服务，浏览器直接看实时状态。
 这是这个沙箱里第一个跑通的项目，后面的项目可以拿它当底座。
 
+**类型：设备端固件**（ESP-IDF 组件工程，跑在板子上；板载网页前端内嵌在 `monitor_server`
+组件的 `web_index.h`，不是独立前端工程）。
+
 ## 当前状态（2026-10-10 实测）
 
 | 项 | 结果 |
@@ -316,8 +319,9 @@ python check_page_js.py                   # 编译进固件的页面 JS 语法�
 一旦 App 配过网，`sdkconfig.local` 里的值就被盖过去，改 defaults 不会再影响板子。
 运行时换网走 BLE 特征值 0008 或 `/api/wifi`，接口和状态回读见 `docs/wifi_provisioning.md`。
 
-两份 defaults 的合并由 `CMakeLists.txt` 里 `project()` 之前的
-`set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.local")` 完成。
+两份 defaults 的合并由 `CMakeLists.txt` 里 `project()` 之前的 SDKCONFIG_DEFAULTS 处理完成：
+本地开发拼成 `sdkconfig.defaults;sdkconfig.local`（local 层不存在就跳过——fresh checkout 没有可合并的凭据），
+外部 `-D` 优先（CI 用它换成 `sdkconfig.defaults;sdkconfig.ci`）。
 
 ## 编译期凭据的一次性播种
 
