@@ -33,6 +33,10 @@ jobs:
       - name: 构建固件（CI 配置：HID 开，无本地凭据）
         shell: bash
         run: |
+          # checkout 配置的 safe.directory 只在它自己的 git 调用里生效；
+          # 不补这句，cmake 里的 git describe 会撞 dubious ownership 而失败，
+          # 版本串退回 "1"（实测于 run 38500718053，App 端版本比较随之失真）。
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           . /opt/esp/idf/export.sh
           cd wifi_led
           idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.ci" build
