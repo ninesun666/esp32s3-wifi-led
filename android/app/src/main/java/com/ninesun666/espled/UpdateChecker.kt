@@ -125,7 +125,9 @@ object UpdateChecker {
         return 0
     }
 
-    private fun versionNumbers(v: String) = v.split('.', '-', '_').mapNotNull { seg ->
+    // 先去 v/V 前缀再切分："v0.0.3" 若按段丢弃 "v0"，会解析成 [0,3]，
+    // 与不带前缀的 "0.0.3"（versionName 的形态）比较出 3>0 的幻影新版本。
+    private fun versionNumbers(v: String) = v.trimStart('v', 'V').split('.', '-', '_').mapNotNull { seg ->
         seg.takeWhile(Char::isDigit).takeIf { it.isNotEmpty() }?.toIntOrNull()
     }
 
