@@ -76,6 +76,22 @@ const char *wifi_creds_source(void)
     return "none";
 }
 
+void wifi_creds_seed_from_build(void)
+{
+    /* A board flashed with real sdkconfig.local values but never provisioned
+     * holds its network only in the binary; an OTA to a CI image (which must
+     * carry the CHANGE_ME template -- the repo is public) would leave it with
+     * nothing stored. Copying the build values into the store once closes that
+     * gap. No-op when something is already stored or the build is a template,
+     * so provisioning and forget keep their own semantics. */
+    if (wifi_creds_has_stored() || IS_PLACEHOLDER(CONFIG_WIFI_LED_WIFI_SSID)) {
+        return;
+    }
+    const char *pass = IS_PLACEHOLDER(CONFIG_WIFI_LED_WIFI_PASSWORD)
+        ? "" : CONFIG_WIFI_LED_WIFI_PASSWORD;
+    wifi_creds_save(CONFIG_WIFI_LED_WIFI_SSID, pass);
+}
+
 void wifi_creds_load(char *ssid, size_t ssid_len, char *pass, size_t pass_len)
 {
     if (ssid_len == 0 || pass_len == 0) {

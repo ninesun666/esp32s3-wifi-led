@@ -17,6 +17,7 @@ typedef enum {
  * drift from what the chip is actually associated to. */
 typedef struct {
     bool associated;
+    char ssid[33]; /* the associated AP, from the driver -- not the compiled config */
     int rssi;
     int channel;
     const char *auth;

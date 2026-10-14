@@ -25,6 +25,9 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- 自动更新的"已就绪"通知；API 33+ 起为运行时权限，代码里按需请求 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 固件推送前台服务：锁屏/退出页面后继续走蓝牙传输 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <application
         android:allowBackup="true"
@@ -41,6 +44,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".ota.OtaService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

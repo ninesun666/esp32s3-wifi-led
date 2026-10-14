@@ -23,6 +23,8 @@ import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
 import com.ninesun666.espled.ble.LedManager
 import com.ninesun666.espled.databinding.ActivityMainBinding
+import com.ninesun666.espled.ota.OtaService
+import com.ninesun666.espled.ota.OtaState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -47,6 +49,9 @@ class MainActivity : AppCompatActivity(), LedManager.Listener {
     /** 板子扫描期间为 false，onWifiConfig 拿到 done/error 就置回 true，轮询协程据此收工。 */
     @Volatile
     private var scanSettled = true
+
+    /** 板子当前固件版本（/api/status 的 fw 字段）；旧固件没有该字段，保持 null。 */
+    private var boardFw: String? = null
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -84,8 +89,15 @@ class MainActivity : AppCompatActivity(), LedManager.Listener {
 
         binding.updateVersion.text = getString(R.string.update_version_fmt, BuildConfig.VERSION_NAME)
         binding.btnCheckUpdate.setOnClickListener { checkForUpdate() }
+        binding.btnOtaCheck.setOnClickListener { checkFirmwareUpdate() }
+        binding.btnOtaPush.setOnClickListener { pushFirmware() }
 
         binding.btnConnect.setOnClickListener {
+            if (OtaService.isActive()) {
+                // 推送期间板子的唯一连接归前台服务，这里抢连接会互相拆台。
+                toast(R.string.ota_in_progress)
+                return@setOnClickListener
+            }
             if (manager.isConnected) manager.disconnect().enqueue() else requestAndScan()
         }
         binding.sldR.addOnChangeListener { _, _, _ -> updatePreview() }
@@ -148,6 +160,14 @@ class MainActivity : AppCompatActivity(), LedManager.Listener {
             showUpdateStatus(getString(R.string.update_ready_fmt, it.version))
             binding.btnCheckUpdate.text = getString(R.string.update_btn_install_fmt, it.version)
         }
+        // 固件推送同理：companion 里的已下载文件 + 状态流在重建后恢复 OTA 卡片。
+        lifecycleScope.launch {
+            OtaService.state.collect { renderOtaState(it) }
+        }
+        OtaService.downloaded?.let {
+            binding.otaStatus.text = getString(R.string.ota_ready_fmt, it.first)
+        }
+        updateOtaCard()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -395,6 +415,119 @@ class MainActivity : AppCompatActivity(), LedManager.Listener {
         }
     }
 
+    /* ---------- 固件 OTA ---------- */
+
+    /** 检查 Release 里的 wifi_led.bin 并下载缓存；版本是否比板子新留给用户判断。 */
+    private fun checkFirmwareUpdate() {
+        binding.btnOtaCheck.isEnabled = false
+        binding.otaStatus.setText(R.string.ota_checking)
+        lifecycleScope.launch {
+            when (val r = UpdateChecker.checkFirmware()) {
+                is UpdateResult.Available -> {
+                    try {
+                        val file = UpdateChecker.cachedFirmwareFor(this@MainActivity, r.version)
+                            ?: UpdateChecker.downloadFirmware(this@MainActivity, r.version, r.url) { p ->
+                                runOnUiThread {
+                                    binding.otaStatus.text =
+                                        getString(R.string.ota_downloading_fmt, p)
+                                }
+                            }
+                        OtaService.downloaded = r.version to file
+                        binding.otaStatus.text = getString(R.string.ota_ready_fmt, r.version)
+                    } catch (e: Exception) {
+                        binding.otaStatus.text =
+                            getString(R.string.ota_download_failed_fmt, e.message ?: "未知错误")
+                    }
+                }
+                is UpdateResult.Failed -> binding.otaStatus.text = r.message
+                is UpdateResult.UpToDate -> Unit // checkFirmware 不比较版本，不会走到
+            }
+            updateOtaCard()
+            binding.btnOtaCheck.isEnabled = true
+        }
+    }
+
+    /** 推送：先拆 MainActivity 的 GATT 链路（板子 NimBLE 单连接），再交前台服务接管。 */
+    private fun pushFirmware() {
+        val cached = OtaService.downloaded
+        if (cached == null || !cached.second.exists()) {
+            OtaService.downloaded = null
+            binding.otaStatus.setText(R.string.ota_file_gone)
+            updateOtaCard()
+            return
+        }
+        val address = manager.bluetoothDevice?.address
+        if (!ready || address == null) {
+            toast(R.string.ota_need_connection)
+            return
+        }
+        manager.disconnect().enqueue()
+        lifecycleScope.launch {
+            // 给板子/协议栈一点时间释放连接，3 s 后无论如何都让服务自己重试。
+            var waited = 0
+            while (manager.isConnected && waited < 3000) {
+                delay(100)
+                waited += 100
+            }
+            ContextCompat.startForegroundService(
+                this@MainActivity,
+                Intent(this@MainActivity, OtaService::class.java)
+                    .putExtra(OtaService.EXTRA_ADDRESS, address)
+                    .putExtra(OtaService.EXTRA_FILE, cached.second.absolutePath)
+                    .putExtra(OtaService.EXTRA_VERSION, cached.first))
+        }
+    }
+
+    /** OTA 卡片的两行版本 + 推送按钮可用性（连接中、有固件、没在推送）。 */
+    private fun updateOtaCard() {
+        binding.otaBoardVersion.text = getString(R.string.ota_board_fw_fmt,
+            boardFw ?: getString(R.string.ota_fw_unknown))
+        binding.otaLatestVersion.text = getString(R.string.ota_latest_fw_fmt,
+            OtaService.downloaded?.first ?: getString(R.string.ota_fw_none))
+        binding.btnOtaPush.isEnabled =
+            ready && OtaService.downloaded != null && !OtaService.isActive()
+    }
+
+    /** 镜像 OtaService.state（含旋转后的当前值重放）。 */
+    private fun renderOtaState(s: OtaState) {
+        when (s) {
+            is OtaState.Idle -> Unit
+            is OtaState.Connecting -> {
+                binding.otaStatus.setText(R.string.ota_state_connecting)
+                binding.otaProgress.isIndeterminate = true
+            }
+            is OtaState.Transferring -> {
+                binding.otaStatus.text =
+                    getString(R.string.ota_progress_fmt, s.written / 1024, s.total / 1024)
+                binding.otaProgress.isIndeterminate = false
+                binding.otaProgress.progress =
+                    (s.written * 100 / maxOf(s.total, 1L)).toInt()
+            }
+            is OtaState.Verifying -> {
+                binding.otaStatus.setText(R.string.ota_state_verifying)
+                binding.otaProgress.isIndeterminate = true
+            }
+            is OtaState.Rebooting -> {
+                binding.otaStatus.setText(R.string.ota_state_rebooting)
+                binding.otaProgress.isIndeterminate = false
+                binding.otaProgress.progress = 100
+            }
+            is OtaState.Success -> {
+                binding.otaStatus.text = getString(R.string.ota_success_fmt, s.version)
+                binding.otaProgress.isIndeterminate = false
+                binding.otaProgress.progress = 100
+                boardFw = null // 新版本要等重连后读 fw 确认
+                updateOtaCard()
+            }
+            is OtaState.Failed -> {
+                binding.otaStatus.text = getString(R.string.ota_failed_fmt, s.reason)
+                binding.otaProgress.isIndeterminate = false
+                binding.otaProgress.progress = 0
+                updateOtaCard()
+            }
+        }
+    }
+
     private fun updatePreview() {
         binding.colorPreview.setBackgroundColor(
             Color.rgb(
@@ -477,7 +610,7 @@ class MainActivity : AppCompatActivity(), LedManager.Listener {
             binding.btnEmoteSleep, binding.btnFill, binding.btnBars,
             binding.btnHidPlay, binding.btnHidPrev, binding.btnHidNext,
             binding.btnHidMute, binding.btnHidVolUp, binding.btnHidVolDown,
-            binding.btnHidLock, binding.btnHidSend,
+            binding.btnHidLock, binding.btnHidSend, binding.btnOtaPush,
             binding.btnWifiScan, binding.btnWifiApply, binding.btnWifiForget,
             binding.etWifiSsid, binding.etWifiPass, binding.menuWifiNetwork
         ).forEach { it.isEnabled = enabled }
@@ -486,6 +619,9 @@ class MainActivity : AppCompatActivity(), LedManager.Listener {
         binding.cardScreen.alpha = if (enabled) 1f else 0.4f
         binding.cardHid.alpha = if (enabled) 1f else 0.4f
         binding.cardWifi.alpha = if (enabled) 1f else 0.4f
+        binding.cardOta.alpha = if (enabled) 1f else 0.4f
+        // btnOtaPush 还要叠加"已有固件且没在推送"条件，交给 updateOtaCard 收口。
+        updateOtaCard()
     }
 
     private fun startPolling() {
@@ -517,7 +653,14 @@ class MainActivity : AppCompatActivity(), LedManager.Listener {
     }
 
     override fun onLedStatus(json: String) {
+        // 旧固件没有 fw 字段：optString 回退空串，保持上次的值不动。
+        boardFw = try {
+            JSONObject(json).optString("fw").takeIf { it.isNotEmpty() } ?: boardFw
+        } catch (e: Exception) {
+            boardFw
+        }
         runOnUiThread {
+            updateOtaCard()
             binding.statusText.text = try {
                 JSONObject(json).toString(2)
             } catch (e: Exception) {

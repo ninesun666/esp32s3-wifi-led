@@ -51,31 +51,54 @@ object UpdateChecker {
 
     private fun updateDir(context: Context) = File(context.cacheDir, "update")
 
-    suspend fun check(): UpdateResult = withContext(Dispatchers.IO) {
-        try {
-            val base = BuildConfig.UPDATE_API_BASE.trimEnd('/')
-            val conn = URL("$base/repos/${BuildConfig.UPDATE_REPO}/releases/latest")
-                .openConnection() as HttpURLConnection
-            try {
-                conn.setRequestProperty("User-Agent", "esp32-led-android")
-                conn.setRequestProperty("Accept", "application/vnd.github+json")
-                conn.connectTimeout = 10_000
-                conn.readTimeout = 15_000
-                when (conn.responseCode) {
-                    404 -> UpdateResult.Failed("暂无发布版本")
-                    200 -> parseLatest(conn.inputStream.bufferedReader().use { it.readText() })
-                    else -> UpdateResult.Failed("检查失败：HTTP ${conn.responseCode}")
+    suspend fun check(): UpdateResult = try {
+        val json = fetchLatestRelease() ?: return UpdateResult.Failed("暂无发布版本")
+        parseLatest(json)
+    } catch (e: Exception) {
+        UpdateResult.Failed("网络错误：${e.message ?: e.javaClass.simpleName}")
+    }
+
+    /** 最新 Release 里的固件附件（wifi_led.bin）。版本比较留给 UI：板子固件版本可能未知。 */
+    suspend fun checkFirmware(): UpdateResult = try {
+        val json = fetchLatestRelease() ?: return UpdateResult.Failed("暂无发布版本")
+        val tag = json.getString("tag_name").removePrefix("v")
+        val assets = json.optJSONArray("assets")
+        var url: String? = null
+        if (assets != null) {
+            for (i in 0 until assets.length()) {
+                val a = assets.getJSONObject(i)
+                if (a.optString("name") == "wifi_led.bin") {
+                    url = a.optString("browser_download_url").takeIf { it.isNotEmpty() }
                 }
-            } finally {
-                conn.disconnect()
             }
-        } catch (e: Exception) {
-            UpdateResult.Failed("网络错误：${e.message ?: e.javaClass.simpleName}")
+        }
+        if (url != null) UpdateResult.Available(tag, url)
+        else UpdateResult.Failed("新版本 $tag 没有固件附件 wifi_led.bin")
+    } catch (e: Exception) {
+        UpdateResult.Failed("网络错误：${e.message ?: e.javaClass.simpleName}")
+    }
+
+    /** 抓最新 Release 的 JSON：200 返回解析结果，404 返回 null，其他状态抛错。 */
+    private suspend fun fetchLatestRelease(): JSONObject? = withContext(Dispatchers.IO) {
+        val base = BuildConfig.UPDATE_API_BASE.trimEnd('/')
+        val conn = URL("$base/repos/${BuildConfig.UPDATE_REPO}/releases/latest")
+            .openConnection() as HttpURLConnection
+        try {
+            conn.setRequestProperty("User-Agent", "esp32-led-android")
+            conn.setRequestProperty("Accept", "application/vnd.github+json")
+            conn.connectTimeout = 10_000
+            conn.readTimeout = 15_000
+            when (conn.responseCode) {
+                404 -> null
+                200 -> JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+                else -> throw RuntimeException("HTTP ${conn.responseCode}")
+            }
+        } finally {
+            conn.disconnect()
         }
     }
 
-    private fun parseLatest(body: String): UpdateResult {
-        val json = JSONObject(body)
+    private fun parseLatest(json: JSONObject): UpdateResult {
         val tag = json.getString("tag_name").removePrefix("v")
         if (compareVersions(tag, BuildConfig.VERSION_NAME) <= 0) return UpdateResult.UpToDate
         val assets = json.optJSONArray("assets")
@@ -92,7 +115,7 @@ object UpdateChecker {
     }
 
     /** 数字逐段比较：a 新于 b 返回正数。非数字段（-beta 之类）忽略。 */
-    private fun compareVersions(a: String, b: String): Int {
+    internal fun compareVersions(a: String, b: String): Int {
         val pa = versionNumbers(a)
         val pb = versionNumbers(b)
         for (i in 0 until maxOf(pa.size, pb.size)) {
@@ -108,10 +131,39 @@ object UpdateChecker {
 
     /** 下载到 esp32-led-{version}.apk：先写 .part，成功后 rename，文件存在即代表该版本完整。 */
     suspend fun download(context: Context, version: String, url: String,
-                         onProgress: (Int) -> Unit): File = downloadMutex.withLock {
+                         onProgress: (Int) -> Unit): File =
+        downloadToFile(updateDir(context), "esp32-led-$version.apk", url, onProgress)
+
+    /** 下载到 firmware/firmware-{version}.bin，同一套 .part→rename 约定。 */
+    suspend fun downloadFirmware(context: Context, version: String, url: String,
+                                 onProgress: (Int) -> Unit): File =
+        downloadToFile(firmwareDir(context), "firmware-$version.bin", url, onProgress)
+
+    fun cachedFirmwareFor(context: Context, version: String): File? {
+        val f = File(firmwareDir(context), "firmware-$version.bin")
+        return if (f.exists()) f else null
+    }
+
+    private fun firmwareDir(context: Context) = File(context.cacheDir, "firmware")
+
+    /** 流式 sha256：固件 begin 命令带上它，板子收完先校验再翻转 boot 槽。 */
+    fun sha256(file: File): String = file.inputStream().use { input ->
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        val buf = ByteArray(64 * 1024)
+        while (true) {
+            val n = input.read(buf)
+            if (n <= 0) break
+            md.update(buf, 0, n)
+        }
+        md.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    /** 下载到 {dir}/{baseName}：先写 .part，成功后 rename，文件存在即代表完整。 */
+    private suspend fun downloadToFile(dir: File, baseName: String, url: String,
+                                       onProgress: (Int) -> Unit): File = downloadMutex.withLock {
         withContext(Dispatchers.IO) {
-            val dir = File(context.cacheDir, "update").apply { mkdirs() }
-            val part = File(dir, "esp32-led.part")
+            dir.mkdirs()
+            val part = File(dir, "$baseName.part")
             val conn = URL(url).openConnection() as HttpURLConnection
             try {
                 conn.setRequestProperty("User-Agent", "esp32-led-android")
@@ -138,13 +190,13 @@ object UpdateChecker {
             } finally {
                 conn.disconnect()
             }
-            val apk = File(dir, "esp32-led-$version.apk")
-            apk.delete()
-            if (!part.renameTo(apk)) {
+            val target = File(dir, baseName)
+            target.delete()
+            if (!part.renameTo(target)) {
                 part.delete()
                 throw RuntimeException("重命名缓存文件失败")
             }
-            apk
+            target
         }
     }
 

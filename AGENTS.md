@@ -32,13 +32,13 @@ macOS/Linux 下在 `wifi_led/` 里直接 `idf.py set-target esp32s3`、`idf.py b
 
 板子平时就插在这台 Mac 上（S3 原生 USB，`/dev/cu.usbmodem1201`，USB 树里显示为 Espressif "USB JTAG_serial debug unit"）：`idf.py -p /dev/cu.usbmodem1201 flash` 直接烧；`sdkconfig.local` 已把控制台切到 USB_SERIAL_JTAG，所以日志也从这根线出（CH343/COM7 那条路只在 Windows 用）。esptool 连一次即硬复位，复位后开端口读就是完整开机日志。BLE 也能从 Mac 直连测试：`python + bleak`（Warp 需在「隐私与安全性 → 蓝牙」授权，否则子进程直接被 TCC 杀掉且无报错）。
 
-换机后 `sdkconfig.local` 丢了、板子还插着的话，可以先从现役固件里找回凭据：`esptool read_flash` 读 app 分区，在 SSID 字面量附近 ±500 字节找可打印字符串当密码候选，逐个试（编译→烧录→扫网验证）。注意排除 `192.168.4.1`、探测 IP 这类形似密码的干扰串。凭据只写进 `sdkconfig.local`，不进日志和对话。
+凭据分两层：运行时在 NVS（`wifi` 命名空间，`wifi_creds` 组件是唯一存放处，优先级 NVS > `sdkconfig.local` > 无），编译期 `sdkconfig.local` 是烧录兜底。`link_state_init()` 还会做一次性播种（`wifi_creds_seed_from_build()`：编译期是真值且 NVS 空时抄进 NVS），所以 OTA 到 CI 镜像（仓库公开，烘的是 CHANGE_ME）也不掉线，历史上"从现役固件扒字符串找回凭据"（`esptool read_flash` 读 app 分区在 SSID 字面量附近找密码候选）就此退役——只有 NVS 整个被擦才需要重配或重新配网。凭据只写进 `sdkconfig.local`，不进日志和对话。
 
 抓开机日志：`python capture_boot.py <秒数> <输出文件>`（这块板要 DTR+RTS 一起拉低才复位，且复位动作发生在关闭端口那一刻，脚本已按实测绕过，细节在文件头注释）。
 
 ## 配置分层——最大的坑
 
-`sdkconfig`（gitignore）才是编译时真正生效的那份。`sdkconfig.defaults`（已提交：硬件配置）和 `sdkconfig.local`（gitignore：路由器 SSID/密码；模板 `sdkconfig.local.example`）由 `wifi_led/CMakeLists.txt` 里的 `set(SDKCONFIG_DEFAULTS ...)` 合并，但**只在 `sdkconfig` 不存在时才被读取**。改完其中任何一个：`rm wifi_led/sdkconfig` 再 build，否则不生效。Wi-Fi 凭据只放在 `sdkconfig.local`——绝不进代码、日志、提交或文档。
+`sdkconfig`（gitignore）才是编译时真正生效的那份。`sdkconfig.defaults`（已提交：硬件配置）和 `sdkconfig.local`（gitignore：路由器 SSID/密码；模板 `sdkconfig.local.example`）由 `wifi_led/CMakeLists.txt` 里的 `set(SDKCONFIG_DEFAULTS ...)` 合并，但**只在 `sdkconfig` 不存在时才被读取**。改完其中任何一个：`rm wifi_led/sdkconfig` 再 build，否则不生效。Wi-Fi 凭据只放在 `sdkconfig.local`——绝不进代码、日志、提交或文档。CI 构建 Release 附带的固件用另一套合并：`idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.ci"`，其中 `sdkconfig.ci`（已提交）开 HID 补齐本地功能集、不含真实凭据（CHANGE_ME + NVS 兜底），见 `.github/workflows/android-release.yml` 的 firmware job。
 
 运行时凭据另有去处：**NVS（namespace `wifi`，键 `ssid`/`pass`）优先级高于 `sdkconfig.local`**，后者只剩"烧录时的兜底"这一角色，留着它是为了让重新烧录永远是恢复手段。`CHANGE_ME` 和空串都算"没配"，所以拿模板直接编译的固件不会去连一个不存在的 SSID，而是空等配网。密码只存在于 `wifi_creds` 组件内部，任何 API 回复、BLE 读取和日志都不会带出它。协议单一来源：`docs/wifi_provisioning.md`。
 

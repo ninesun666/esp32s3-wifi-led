@@ -1,12 +1,15 @@
 name: Android Release
 
-# 推 v* 标签（如 v1.0.0）→ 构建签名 APK 并发布 GitHub Release；
+# 推 v* 标签（如 v1.2.3）→ 构建签名 APK + 板子固件并发布 GitHub Release；
 # Actions 页面手动触发 → 只产出 Artifact，不发 Release。
 #
 # 首次使用需在仓库 Settings → Secrets and variables → Actions 添加：
 #   ANDROID_KEYSTORE_BASE64  本地 android/keystore/release.jks 的 base64（macOS: base64 -i android/keystore/release.jks）
 #   KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD  取自本地 android/keystore.properties
 # 未配置以上 secrets 也能构建，但产物是 debug 签名，无法覆盖安装正式版。
+#
+# 固件镜像（wifi_led.bin）用 sdkconfig.ci 覆盖层构建：功能与本地一致（HID 开），
+# 但不烘真实 Wi-Fi 凭据（仓库公开）——板子 OTA 后沿用自己 NVS 里的凭据。
 
 on:
   push:
@@ -17,6 +20,29 @@ permissions:
   contents: write
 
 jobs:
+  firmware:
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v5.3.5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 固件版本串来自 git describe（PROJECT_VER），需要完整历史和标签。
+          fetch-depth: 0
+
+      - name: 构建固件（CI 配置：HID 开，无本地凭据）
+        shell: bash
+        run: |
+          . /opt/esp/idf/export.sh
+          cd wifi_led
+          idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.ci" build
+
+      - name: 上传固件 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: wifi_led/build/wifi_led.bin
+
   build:
     runs-on: ubuntu-latest
     env:
@@ -69,9 +95,19 @@ jobs:
           name: app-release
           path: android/app/build/outputs/apk/release/*.apk
 
-      - name: 发布到 GitHub Release（仅标签触发）
-        if: startsWith(github.ref, 'refs/tags/v')
+  release:
+    needs: [build, firmware]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 发布到 GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: android/app/build/outputs/apk/release/*.apk
+          files: |
+            artifacts/app-release/*.apk
+            artifacts/firmware/wifi_led.bin
           generate_release_notes: true

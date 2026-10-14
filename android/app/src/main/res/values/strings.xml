@@ -66,6 +66,30 @@
     <string name="wifi_forgotten">已清除，板子回到编译时的网络</string>
 
     <string name="title_update">软件更新</string>
+
+    <string name="title_ota">板子固件更新（蓝牙推送）</string>
+    <string name="ota_board_fw_fmt">板子固件：%1$s</string>
+    <string name="ota_latest_fw_fmt">最新固件：%1$s</string>
+    <string name="ota_fw_unknown">未知（连接后读取）</string>
+    <string name="ota_fw_none">未获取</string>
+    <string name="ota_btn_check">检查固件</string>
+    <string name="ota_btn_push">推送到板子</string>
+    <string name="ota_checking">正在检查固件…</string>
+    <string name="ota_downloading_fmt">正在下载固件…%1$d%%</string>
+    <string name="ota_download_failed_fmt">固件下载失败：%1$s</string>
+    <string name="ota_ready_fmt">固件 %1$s 已就绪，推送后板子会重启并断开蓝牙</string>
+    <string name="ota_state_connecting">连接板子…</string>
+    <string name="ota_state_verifying">板子校验中…</string>
+    <string name="ota_state_rebooting">板子重启中…</string>
+    <string name="ota_progress_fmt">推送中：%1$d / %2$d KB</string>
+    <string name="ota_success_fmt">固件 %1$s 推送完成，板子已重启，请重新连接</string>
+    <string name="ota_failed_fmt">推送失败：%1$s</string>
+    <string name="ota_file_gone">固件缓存已被系统清理，请重新检查下载</string>
+    <string name="ota_need_connection">请先连接板子</string>
+    <string name="ota_in_progress">固件推送进行中，请稍候</string>
+    <string name="ota_err_precondition">推送条件不满足（固件文件或蓝牙权限缺失）</string>
+    <string name="ota_channel_name">固件推送</string>
+    <string name="ota_notif_transferring_fmt">推送中 %1$d%%</string>
     <string name="update_version_fmt">当前版本 v%1$s</string>
     <string name="btn_check_update">检查更新</string>
     <string name="update_checking">正在检查更新…</string>

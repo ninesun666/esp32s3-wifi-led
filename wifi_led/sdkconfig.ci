@@ -1,0 +1,14 @@
+# CI-only config overlay, merged after sdkconfig.defaults:
+#   idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.ci" build
+#
+# CI builds the firmware attached to GitHub Releases. Those images must carry
+# the same feature set as the local dev build, but the real Wi-Fi credentials
+# (which live only in the gitignored sdkconfig.local) must never be baked in:
+# the repo is public. The board keeps its own credentials in NVS across an
+# OTA, so a CHANGE_ME image still joins the router (see link_state.c).
+#
+# Console on UART0 is already set in sdkconfig.defaults; HID claiming GPIO19/20
+# is what makes USB-Serial-JTAG flashing impossible on the local board too.
+
+CONFIG_WIFI_LED_USB_HID_ENABLE=y
+CONFIG_TINYUSB_HID_COUNT=1

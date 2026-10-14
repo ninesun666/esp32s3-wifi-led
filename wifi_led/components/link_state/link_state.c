@@ -22,6 +22,7 @@
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
 #include "nvs_flash.h"
+#include "nvs.h"
 #include "link_state.h"
 #include "wifi_creds.h"
 #include "lwip/sockets.h"
@@ -210,6 +211,7 @@ bool link_state_sta_info(link_state_ap_info_t *out)
         return false;
     }
     out->associated = true;
+    memcpy(out->ssid, rec.ssid, sizeof(out->ssid) - 1);
     out->rssi = rec.rssi;
     out->channel = rec.primary;
     out->auth = link_state_auth_name(rec.authmode);
@@ -592,7 +594,16 @@ static void report_memory(void)
 
 void link_state_init(void)
 {
+    /* NVS before anything reads or seeds credentials: on a fresh flash the
+     * partition must be initialized before any nvs_open can succeed. */
+    ESP_ERROR_CHECK(nvs_flash_init());
     s_scan_lock = xSemaphoreCreateMutex();
+    /* One-time seed: real build-time credentials (a CI image carries only the
+     * CHANGE_ME template) are copied into the store so an OTA to a
+     * credential-free image keeps this board's network. Provisioning writes
+     * override it; forget clears it and the next ladder pass falls back to
+     * the build values -- the effective network never changes because of it. */
+    wifi_creds_seed_from_build();
     wifi_creds_load(s_ssid, sizeof(s_ssid), s_pass, sizeof(s_pass));
     ESP_LOGI(TAG, "target network: \"%s\" (source: %s, passphrase %u chars)",
              s_ssid[0] ? s_ssid : "(none)", wifi_creds_source(),
@@ -600,7 +611,6 @@ void link_state_init(void)
 
     report_memory();
 
-    ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
     s_wifi_events = xEventGroupCreate();
     ESP_ERROR_CHECK(esp_event_loop_create_default());

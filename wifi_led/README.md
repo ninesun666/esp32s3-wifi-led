@@ -307,6 +307,7 @@ python check_page_js.py                   # 编译进固件的页面 JS 语法�
 | `sdkconfig.defaults` | 硬件相关：16 MiB flash、Octal PSRAM、自定义分区表、灯脚 | 是 |
 | `sdkconfig.local` | 路由器 SSID + 密码 = **烧录时的兜底凭据** | **否**（gitignore） |
 | `sdkconfig.local.example` | 上面那份的模板 | 是 |
+| `sdkconfig.ci` | CI 构建覆盖层：开 HID，不带真实凭据 | 是 |
 | `sdkconfig` | 编译时真正生效的合并结果 | 否（gitignore） |
 
 凭据的优先级是 **NVS 里手机/App 配过的网络 > `sdkconfig.local` 的编译期值 > 谁都没配**。
@@ -317,6 +318,18 @@ python check_page_js.py                   # 编译进固件的页面 JS 语法�
 
 两份 defaults 的合并由 `CMakeLists.txt` 里 `project()` 之前的
 `set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.local")` 完成。
+
+## 编译期凭据的一次性播种
+
+上面的优先级链有个隐患：只烧录过 `sdkconfig.local` 固件、从没配过网的板子，凭据只活在
+二进制里——OTA 到 CI 镜像（仓库公开，只能烘 `CHANGE_ME` 模板）后 NVS 是空的，板子就掉线
+等配网。所以 `link_state_init()` 开机会调 `wifi_creds_seed_from_build()`：编译期值是**真值**
+（非 `CHANGE_ME`/空）且 NVS 里没存过东西时，把它抄进 NVS 一次。之后：
+
+- OTA 到任何镜像（包括 CI 的无凭件）都沿用 NVS 里的存量，板子不掉线；
+- App 配网写入优先生效；`forget` 只清 NVS，下一轮回落到编译期值，重启后又会播种回去——
+  对本地烧录的板子来说两个来源值相同，行为不变；
+- 历史上"换机后从固件里扒字符串找回凭据"的流程就此退役：重刷任何镜像，NVS 都还在。
 
 BLE 的开关和广播名在 `main/Kconfig.projbuild`（`EXAMPLE_BLE_ENABLE` / `EXAMPLE_BLE_NAME`），
 NimBLE 细节（MTU 512、主机内存池放 PSRAM、单连接、裁掉不用角色/服务）在 `sdkconfig.defaults`。

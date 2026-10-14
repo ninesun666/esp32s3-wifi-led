@@ -15,6 +15,7 @@
 #include "esp_log.h"
 #include "esp_http_server.h"
 #include "esp_heap_caps.h"
+#include "esp_app_desc.h"
 #include "cJSON.h"
 #include "mdns.h"
 #include "link_state.h"
@@ -61,8 +62,11 @@ char *monitor_server_status_json(bool with_clients)
     int ap_stas = link_state_ap_clients(with_clients ? &clients : NULL);
 
     cJSON *root = cJSON_CreateObject();
+    /* Image version from the app descriptor (git describe / PROJECT_VER), so
+     * the phone app can tell which firmware the board runs. */
+    cJSON_AddStringToObject(root, "fw", esp_app_get_description()->version);
     cJSON_AddStringToObject(root, "state", link_state_name(link_state_get()));
-    cJSON_AddStringToObject(root, "ssid", CONFIG_WIFI_LED_WIFI_SSID);
+    cJSON_AddStringToObject(root, "ssid", associated ? ap.ssid : "-");
     cJSON_AddStringToObject(root, "ip", ip);
     cJSON_AddStringToObject(root, "mac", mac);
     cJSON_AddNumberToObject(root, "rssi", associated ? ap.rssi : 0);

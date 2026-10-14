@@ -26,6 +26,12 @@ bool wifi_creds_has_stored(void);
  * "nothing configured". Pass may be an empty string for an open network. */
 void wifi_creds_load(char *ssid, size_t ssid_len, char *pass, size_t pass_len);
 
+/* One-time copy of real build-time credentials into the store (no-op when the
+ * store is filled or the build still carries the CHANGE_ME template), so a
+ * board that only ever knew sdkconfig.local keeps its network across an OTA
+ * to a credential-free CI image. */
+void wifi_creds_seed_from_build(void);
+
 /* False when the effective network is open (no passphrase). The passphrase
  * itself never leaves this component -- callers get this instead of a getter. */
 bool wifi_creds_has_password(void);
