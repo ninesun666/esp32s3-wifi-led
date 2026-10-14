@@ -101,6 +101,10 @@ App 侧上限 15 s（`WIFI_SCAN_TIMEOUT_MS`）。
 2. **HTTP 无鉴权**，这是整个 monitor_server 的既有设计（LAN 内诊断设备）。`/api/wifi`
    把"能改网络"这件事也放进了这个前提里，比改灯严重，所以路由器的隔离就是它的边界；
    需要只留 BLE 的话，把 monitor_server 的这两条 URI 摘掉即可。
+   要把这套接口经公网给人用（手机遥控），鉴权不在固件里，由 `tools/tunnel/monitor_proxy.py`
+   的门禁代理承担：没解锁 key 时板子的任何路径都返回 401，`/api/wifi` 与 `/api/ota`
+   只在 `--mode control` 且已解锁时透传。**这条边界是代理给的，不是板子给的**——
+   直接暴露板子地址的做法依然等于把改网络和刷固件交给任何能连到它的人。
 3. 密码不进日志：`wifi_creds` 只打印长度，`net_config` 只打印 SSID，
    `ESP_LOGI(TAG, "network set to \"%s\", re-associating", ssid)` 是有意不含凭据的。
 4. App 不保存密码：不写 SharedPreferences、不进文件；下发成功即清空输入框

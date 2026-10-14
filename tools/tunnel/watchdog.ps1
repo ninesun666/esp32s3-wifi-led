@@ -10,6 +10,10 @@ $proxyPid = Join-Path $dir 'proxy.pid'
 $cfPid = Join-Path $dir 'cloudflared.pid'
 $cf = Join-Path $env:USERPROFILE '.local\bin\cloudflared.exe'
 $proxy = Join-Path $dir 'monitor_proxy.py'
+# proxy.mode holds readonly|control; control is the phone-remote default.
+$ProxyMode = 'control'
+$mf = Join-Path $dir 'proxy.mode'
+if (Test-Path $mf) { $ProxyMode = ((Get-Content $mf | Select-Object -First 1) -as [string]).Trim() }
 
 function Log([string]$m) {
   $line = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + '  ' + $m
@@ -19,7 +23,7 @@ function Log([string]$m) {
 
 function Test-Http([string]$u, [int]$maxTime) {
   if (-not $u) { return $false }
-  & curl.exe -s -o $null --max-time $maxTime $u
+  & curl.exe -s -f -o $null --max-time $maxTime $u
   return ($LASTEXITCODE -eq 0)
 }
 
@@ -31,8 +35,8 @@ function Read-Pid([string]$pf) {
   return $null
 }
 
-function Start-Detached([string]$file, [string]$argLine, [string]$outName) {
-  $p = Start-Process -FilePath $file -ArgumentList $argLine -WindowStyle Hidden -PassThru `
+function Start-Detached([string]$file, [string[]]$argList, [string]$outName) {
+  $p = Start-Process -FilePath $file -ArgumentList $argList -WindowStyle Hidden -PassThru `
     -RedirectStandardOutput (Join-Path $dir ($outName + '.log')) `
     -RedirectStandardError (Join-Path $dir ($outName + '.err.log'))
   return $p.Id
@@ -40,13 +44,13 @@ function Start-Detached([string]$file, [string]$argLine, [string]$outName) {
 
 $changed = @()
 
-if (-not (Read-Pid $proxyPid) -or -not (Test-Http 'http://127.0.0.1:8788/' 8)) {
+if (-not (Read-Pid $proxyPid) -or -not (Test-Http 'http://127.0.0.1:8788/remote' 8)) {
   $old = Read-Pid $proxyPid
   if ($old) { Stop-Process -Id $old -Force -ErrorAction SilentlyContinue }
   Start-Sleep -Seconds 1
-  $id = Start-Detached 'python.exe' ('"' + $proxy + '"') 'proxy'
+  $id = Start-Detached 'python.exe' @(('"' + $proxy + '"'), ('--mode ' + $ProxyMode)) 'proxy'
   Start-Sleep -Seconds 2
-  if (Test-Http 'http://127.0.0.1:8788/' 8) {
+  if (Test-Http 'http://127.0.0.1:8788/remote' 8) {
     $id | Set-Content -Encoding ascii $proxyPid
     $changed += "proxy pid $id up"
   } else {
@@ -54,9 +58,10 @@ if (-not (Read-Pid $proxyPid) -or -not (Test-Http 'http://127.0.0.1:8788/' 8)) {
   }
 }
 
-$cur = (Get-Content $urlFile -ErrorAction SilentlyContinue) | Select-Object -First 1
+$cur = ((Get-Content $urlFile -ErrorAction SilentlyContinue) | Select-Object -First 1) -as [string]
+if (-not $cur) { $cur = 'http://127.0.0.1:1/' }
 $cfDead = -not (Read-Pid $cfPid)
-if ($cfDead -or -not (Test-Http $cur 20)) {
+if ($cfDead -or -not (Test-Http ($cur.TrimEnd('/') + '/remote') 20)) {
   $old = Read-Pid $cfPid
   if ($old) { Stop-Process -Id $old -Force -ErrorAction SilentlyContinue }
   if (Test-Path (Join-Path $dir 'cloudflared.log')) { Remove-Item (Join-Path $dir 'cloudflared.log') -Force }

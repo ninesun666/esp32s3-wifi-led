@@ -1,0 +1,20 @@
+# Named tunnel on ninesun.site —— 固定入口（需要 Cloudflare 账号，本仓库外的一步）
+#
+# 用法：在 Cloudflare Zero Trust → Networks → Tunnels 建一条 tunnel，
+# 域名指向 esp32.ninesun.site，然后把下面两个占位符填上。
+# 用 token 方式跑（跨机器不需要 .cloudflared/<TUNNEL_ID>.json）：
+#   cloudflared tunnel run --token <TOKEN>      # token 只进本地文件/环境变量，不进仓库不进 issue
+#
+# 用凭证文件方式跑（在同一台机器上建 tunnel 时）：
+#   cloudflared tunnel route dns esp32-s3 esp32.ninesun.site
+#   cloudflared tunnel --config this-file.yml run
+
+tunnel: <TUNNEL_ID>
+credentials-file: C:\Users\<you>\.cloudflared\<TUNNEL_ID>.json
+
+ingress:
+  # 只放行这一个域名到本地只读门禁代理，别的都 404
+  - hostname: esp32.ninesun.site
+    service: http://127.0.0.1:8788
+
+  - service: http_status:404
